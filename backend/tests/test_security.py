@@ -52,7 +52,17 @@ def test_sql_injection_defense():
     Verifies that search query strings containing SQL injection payloads
     do not compromise the SQLite/PostgreSQL parameterized queries.
     """
+    from uuid import UUID
+    from app.core.auth import AuthenticatedUser, get_current_user
+
     app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        email="developer@test.local",
+        full_name="Local Developer",
+        role="recruiter",
+        token=None,
+    )
     client = TestClient(app)
 
     malicious_queries = [
@@ -70,7 +80,7 @@ def test_sql_injection_defense():
 
 def test_no_secrets_in_environment_examples():
     """Verifies that .env.example contains only non-secret placeholders."""
-    env_example_path = "backend/.env.example"
+    env_example_path = "backend/.env.example" if os.path.exists("backend/.env.example") else ".env.example"
     assert os.path.exists(env_example_path)
 
     with open(env_example_path, "r", encoding="utf-8") as f:

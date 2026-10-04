@@ -77,6 +77,7 @@ class ExplainabilityPayload(BaseModel):
 class EvaluationResultItem(BaseModel):
     """Evaluation result for one Candidate evaluated against one Job."""
     id: UUID
+    recruiter_id: Optional[UUID] = None
     run_id: UUID
     candidate_id: UUID
     job_id: UUID
@@ -95,6 +96,7 @@ class EvaluationResultItem(BaseModel):
 class EvaluationRunResponse(BaseModel):
     """Status and metadata of an Evaluation Run."""
     id: UUID
+    recruiter_id: Optional[UUID] = None
     status: RunStatus
     total_candidates: int
     total_jobs: int

@@ -1,12 +1,14 @@
 """
 API endpoints for Multi-Role Candidate Evaluation, Matrix Retrieval,
 Role Leaderboards, and Grounded Explainability.
+Secured with Supabase Authentication and PostgreSQL Row Level Security.
 """
 
 from typing import List
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.logging import get_logger
 from app.core.orchestrator import PipelineOrchestrator
 from app.schemas.evaluation import (
@@ -40,10 +42,15 @@ orchestrator = PipelineOrchestrator(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Create and execute a Multi-Role Candidate Evaluation run",
 )
-def create_evaluation_run(request: EvaluationConfigRequest) -> EvaluationRunResponse:
-    """Executes N candidates x M jobs matrix evaluation with configurable weights."""
+def create_evaluation_run(
+    request: EvaluationConfigRequest,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> EvaluationRunResponse:
+    """Executes N candidates x M jobs matrix evaluation with configurable weights under recruiter ownership."""
     try:
-        run_record = orchestrator.execute_multi_role_evaluation(request)
+        run_record = orchestrator.execute_multi_role_evaluation(
+            request, recruiter_id=user.id, token=user.token
+        )
         return run_record
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -57,9 +64,12 @@ def create_evaluation_run(request: EvaluationConfigRequest) -> EvaluationRunResp
     response_model=EvaluationRunResponse,
     summary="Get status and counts for an evaluation run",
 )
-def get_run_status(run_id: UUID) -> EvaluationRunResponse:
+def get_run_status(
+    run_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> EvaluationRunResponse:
     """Retrieves progress and completion state of an evaluation run."""
-    run_record = evaluation_repo.get_run(run_id)
+    run_record = evaluation_repo.get_run(run_id, token=user.token)
     if not run_record:
         raise HTTPException(status_code=404, detail=f"Evaluation run '{run_id}' not found")
     return run_record
@@ -70,22 +80,33 @@ def get_run_status(run_id: UUID) -> EvaluationRunResponse:
     response_model=EvaluationMatrixResponse,
     summary="Retrieve N x M Multi-Role Fitment Matrix",
 )
-def get_evaluation_matrix(run_id: UUID) -> EvaluationMatrixResponse:
-    """Returns the complete N candidates x M jobs evaluation matrix grid."""
-    run_record = evaluation_repo.get_run(run_id)
+def get_evaluation_matrix(
+    run_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> EvaluationMatrixResponse:
+    """Returns the complete N candidates x M jobs evaluation matrix grid for owned runs."""
+    run_record = evaluation_repo.get_run(run_id, token=user.token)
     if not run_record:
         raise HTTPException(status_code=404, detail=f"Evaluation run '{run_id}' not found")
 
-    cells = evaluation_repo.get_matrix_cells(run_id)
-    all_jobs = job_repo.list_all(limit=500)
-    all_candidates = candidate_repo.list_all(limit=1000)
+    cells = evaluation_repo.get_matrix_cells(run_id, token=user.token)
+    all_jobs = job_repo.list_all(limit=500, recruiter_id=user.id, token=user.token)
+    all_candidates = candidate_repo.list_all(limit=1000, recruiter_id=user.id, token=user.token)
 
     # Filter to only jobs & candidates present in this run
     cand_ids = {c.candidate_id for c in cells}
     job_ids = {c.job_id for c in cells}
 
-    cand_list = [{"id": str(c.id), "name": c.structured_profile.full_name} for c in all_candidates if c.id in cand_ids]
-    job_list = [{"id": str(j.id), "title": j.title} for j in all_jobs if j.id in job_ids]
+    cand_list = [
+        {"id": str(c.id), "name": c.structured_profile.full_name}
+        for c in all_candidates
+        if c.id in cand_ids
+    ]
+    job_list = [
+        {"id": str(j.id), "title": j.title}
+        for j in all_jobs
+        if j.id in job_ids
+    ]
 
     return EvaluationMatrixResponse(
         run_id=run_id,
@@ -105,9 +126,12 @@ def get_role_leaderboard(
     run_id: UUID,
     job_id: UUID,
     limit: int = Query(default=50, ge=1, le=500),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[LeaderboardEntry]:
     """Returns candidates ranked by composite fitment score for a specific job description."""
-    return evaluation_repo.get_leaderboard_for_job(run_id=run_id, job_id=job_id, limit=limit)
+    return evaluation_repo.get_leaderboard_for_job(
+        run_id=run_id, job_id=job_id, limit=limit, token=user.token
+    )
 
 
 @router.get(
@@ -119,10 +143,11 @@ def get_evaluation_explainability(
     run_id: UUID,
     candidate_id: UUID,
     job_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> ExplainabilityPayload:
     """Returns auditable evidence breakdown: matched/missing skills, experience delta, and rationale."""
     eval_item = evaluation_repo.get_candidate_evaluation_for_job(
-        run_id=run_id, candidate_id=candidate_id, job_id=job_id
+        run_id=run_id, candidate_id=candidate_id, job_id=job_id, token=user.token
     )
     if not eval_item:
         raise HTTPException(

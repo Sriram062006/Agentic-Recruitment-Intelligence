@@ -1,11 +1,13 @@
 """
 API endpoints for Job Description Ingestion and Management.
+Secured with Supabase Authentication and PostgreSQL Row Level Security.
 """
 
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
+from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.logging import get_logger
 from app.parsers.factory import parse_document
 from app.schemas.job import JobProfile, JobResponse
@@ -29,8 +31,9 @@ llm_provider = GeminiLLMProvider()
 )
 async def upload_jobs(
     files: List[UploadFile] = File(..., description="Job Description documents in PDF or DOCX format"),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[JobResponse]:
-    """Ingests job descriptions, parses text, extracts structured profiles, and persists records."""
+    """Ingests job descriptions, parses text, extracts structured profiles, and persists records under recruiter ownership."""
     if not files:
         raise HTTPException(status_code=400, detail="No files provided in request")
 
@@ -49,25 +52,28 @@ async def upload_jobs(
             # 2. Extract structured profile via LLM provider
             job_profile = llm_provider.extract_job_profile(parsed_doc.raw_text)
 
-            # 3. Store file in storage
-            dest_path = f"jds/{parsed_doc.file_hash[:16]}_{file_name}"
+            # 3. Store file in storage (isolated folder per recruiter user_id)
+            dest_path = f"{user.id}/{parsed_doc.file_hash[:16]}_{file_name}"
             storage_path = storage_service.upload_file(
                 bucket="job-descriptions",
                 destination_path=dest_path,
                 content=content,
                 content_type=parsed_doc.file_type,
+                token=user.token,
             )
 
-            # 4. Save to repository
+            # 4. Save to repository with recruiter_id ownership
             saved_job = job_repo.create(
                 title=job_profile.title,
                 department=job_profile.department,
                 storage_path=storage_path,
                 raw_content=parsed_doc.raw_text,
                 structured_profile=job_profile,
+                recruiter_id=user.id,
+                token=user.token,
             )
             ingested_jobs.append(saved_job)
-            logger.info("Successfully ingested Job '%s' (ID: %s)", saved_job.title, saved_job.id)
+            logger.info("Successfully ingested Job '%s' (ID: %s) for Recruiter %s", saved_job.title, saved_job.id, user.id)
 
         except ValueError as ve:
             logger.warning("Validation failure for file '%s': %s", file_name, ve)
@@ -87,9 +93,10 @@ async def upload_jobs(
 def list_jobs(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[JobResponse]:
-    """Lists ingested job descriptions."""
-    return job_repo.list_all(limit=limit, offset=offset)
+    """Lists ingested job descriptions belonging to the authenticated recruiter."""
+    return job_repo.list_all(limit=limit, offset=offset, recruiter_id=user.id, token=user.token)
 
 
 @router.get(
@@ -97,9 +104,12 @@ def list_jobs(
     response_model=JobResponse,
     summary="Get single Job Description profile",
 )
-def get_job(job_id: UUID) -> JobResponse:
+def get_job(
+    job_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> JobResponse:
     """Retrieves structured profile and text for a specific Job Description."""
-    job = job_repo.get_by_id(job_id)
+    job = job_repo.get_by_id(job_id, recruiter_id=user.id, token=user.token)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job Description with ID '{job_id}' not found")
     return job
@@ -110,8 +120,11 @@ def get_job(job_id: UUID) -> JobResponse:
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a Job Description",
 )
-def delete_job(job_id: UUID) -> None:
+def delete_job(
+    job_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> None:
     """Deletes a job description and its associated records."""
-    deleted = job_repo.delete(job_id)
+    deleted = job_repo.delete(job_id, recruiter_id=user.id, token=user.token)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Job Description with ID '{job_id}' not found")

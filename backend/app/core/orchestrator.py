@@ -95,6 +95,8 @@ class PipelineOrchestrator:
         self,
         request: EvaluationConfigRequest,
         run_id: Optional[UUID] = None,
+        recruiter_id: Optional[UUID] = None,
+        token: Optional[str] = None,
     ) -> EvaluationRunResponse:
         """
         Executes N candidates x M jobs matrix evaluation.
@@ -104,7 +106,7 @@ class PipelineOrchestrator:
         rid = run_id or uuid4()
 
         # 1. Resolve Target Jobs
-        all_jobs = self.job_repo.list_all(limit=500)
+        all_jobs = self.job_repo.list_all(limit=500, recruiter_id=recruiter_id, token=token)
         if request.job_ids:
             target_jobs = [j for j in all_jobs if j.id in request.job_ids]
         else:
@@ -114,7 +116,7 @@ class PipelineOrchestrator:
             raise ValueError("No active job descriptions found for evaluation run")
 
         # 2. Resolve Target Candidates (Canonical Profiles)
-        all_candidates = self.candidate_repo.list_all(limit=1000)
+        all_candidates = self.candidate_repo.list_all(limit=1000, recruiter_id=recruiter_id, token=token)
         if request.candidate_ids:
             target_candidates = [c for c in all_candidates if c.id in request.candidate_ids]
         else:
@@ -148,8 +150,10 @@ class PipelineOrchestrator:
             total_jobs=len(target_jobs),
             config=config_snapshot,
             run_id=rid,
+            recruiter_id=recruiter_id,
+            token=token,
         )
-        self.evaluation_repo.update_run_status(rid, RunStatus.PROCESSING)
+        self.evaluation_repo.update_run_status(rid, RunStatus.PROCESSING, token=token)
 
         try:
             # 5. Ensure All Target Candidates are Indexed in FAISS
@@ -191,6 +195,7 @@ class PipelineOrchestrator:
                         {
                             "id": uuid4(),
                             "run_id": rid,
+                            "recruiter_id": recruiter_id,
                             "candidate_id": cand.id,
                             "job_id": job.id,
                             "composite_score": fitment_signals["composite_score"],
@@ -209,8 +214,8 @@ class PipelineOrchestrator:
                     all_evaluations.append(eval_item)
 
             # 8. Save All N x M Evaluation Records
-            self.evaluation_repo.save_bulk_evaluations(all_evaluations)
-            self.evaluation_repo.update_run_status(rid, RunStatus.COMPLETED)
+            self.evaluation_repo.save_bulk_evaluations(all_evaluations, token=token)
+            self.evaluation_repo.update_run_status(rid, RunStatus.COMPLETED, token=token)
             logger.info(
                 "Evaluation run %s completed: %d candidates x %d jobs = %d evaluations",
                 rid,
@@ -218,9 +223,9 @@ class PipelineOrchestrator:
                 len(target_jobs),
                 len(all_evaluations),
             )
-            return self.evaluation_repo.get_run(rid)  # type: ignore
+            return self.evaluation_repo.get_run(rid, token=token)  # type: ignore
 
         except Exception as e:
             logger.error("Evaluation run %s failed: %s", rid, e, exc_info=True)
-            self.evaluation_repo.update_run_status(rid, RunStatus.FAILED, error_message=str(e))
+            self.evaluation_repo.update_run_status(rid, RunStatus.FAILED, error_message=str(e), token=token)
             raise

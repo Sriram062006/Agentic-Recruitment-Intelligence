@@ -1,6 +1,7 @@
 """
 Repository for Canonical Candidate entities.
 Enforces the single-candidate multi-role data model and SHA-256 deduplication.
+Supports live Supabase PostgreSQL with RLS and SQLite fallback.
 """
 
 import json
@@ -10,6 +11,8 @@ from uuid import UUID, uuid4
 
 from app.schemas.candidate import CandidateProfile, CandidateResponse
 from app.services.database.supabase_client import get_db
+
+DEFAULT_LOCAL_RECRUITER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 class CandidateRepository:
@@ -25,25 +28,63 @@ class CandidateRepository:
         structured_profile: CandidateProfile,
         faiss_index_id: Optional[int] = None,
         candidate_id: Optional[UUID] = None,
+        recruiter_id: Optional[UUID] = None,
+        token: Optional[str] = None,
     ) -> CandidateResponse:
         cid = candidate_id or uuid4()
+        rid = recruiter_id or DEFAULT_LOCAL_RECRUITER_ID
         now_iso = datetime.now(timezone.utc).isoformat()
-        profile_json = structured_profile.model_dump_json()
+        profile_dict = structured_profile.model_dump()
+
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            payload = {
+                "id": str(cid),
+                "recruiter_id": str(rid),
+                "file_name": file_name,
+                "storage_path": storage_path,
+                "file_hash": file_hash,
+                "raw_text": raw_text,
+                "structured_profile": profile_dict,
+                "faiss_index_id": faiss_index_id,
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            }
+            res = client.table("candidates").insert(payload).execute()
+            if not res.data:
+                raise RuntimeError("Failed to insert candidate into Supabase PostgreSQL")
+            row = res.data[0]
+            prof_data = row["structured_profile"]
+            if isinstance(prof_data, str):
+                prof_data = json.loads(prof_data)
+            return CandidateResponse(
+                id=UUID(row["id"]),
+                recruiter_id=UUID(row["recruiter_id"]) if row.get("recruiter_id") else rid,
+                file_name=row["file_name"],
+                storage_path=row["storage_path"],
+                file_hash=row["file_hash"],
+                raw_text=row["raw_text"],
+                structured_profile=CandidateProfile(**prof_data),
+                faiss_index_id=row["faiss_index_id"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
 
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO candidates (id, file_name, storage_path, file_hash, raw_text, structured_profile, faiss_index_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                INSERT INTO candidates (id, recruiter_id, file_name, storage_path, file_hash, raw_text, structured_profile, faiss_index_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 (
                     str(cid),
+                    str(rid),
                     file_name,
                     storage_path,
                     file_hash,
                     raw_text,
-                    profile_json,
+                    json.dumps(profile_dict),
                     faiss_index_id,
                     now_iso,
                     now_iso,
@@ -51,9 +92,39 @@ class CandidateRepository:
             )
             conn.commit()
 
-        return self.get_by_id(cid)  # type: ignore
+        return self.get_by_id(cid, recruiter_id=rid)  # type: ignore
 
-    def get_by_id(self, candidate_id: UUID) -> Optional[CandidateResponse]:
+    def get_by_id(
+        self,
+        candidate_id: UUID,
+        recruiter_id: Optional[UUID] = None,
+        token: Optional[str] = None,
+    ) -> Optional[CandidateResponse]:
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            query = client.table("candidates").select("*").eq("id", str(candidate_id))
+            if recruiter_id:
+                query = query.eq("recruiter_id", str(recruiter_id))
+            res = query.execute()
+            if not res.data:
+                return None
+            row = res.data[0]
+            prof_data = row["structured_profile"]
+            if isinstance(prof_data, str):
+                prof_data = json.loads(prof_data)
+            return CandidateResponse(
+                id=UUID(row["id"]),
+                recruiter_id=UUID(row["recruiter_id"]) if row.get("recruiter_id") else None,
+                file_name=row["file_name"],
+                storage_path=row["storage_path"],
+                file_hash=row["file_hash"],
+                raw_text=row["raw_text"],
+                structured_profile=CandidateProfile(**prof_data),
+                faiss_index_id=row["faiss_index_id"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
+
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM candidates WHERE id = ?;", (str(candidate_id),))
@@ -64,6 +135,7 @@ class CandidateRepository:
             profile_data = json.loads(row["structured_profile"])
             return CandidateResponse(
                 id=UUID(row["id"]),
+                recruiter_id=UUID(row["recruiter_id"]) if "recruiter_id" in row.keys() else None,
                 file_name=row["file_name"],
                 storage_path=row["storage_path"],
                 file_hash=row["file_hash"],
@@ -74,7 +146,37 @@ class CandidateRepository:
                 updated_at=datetime.fromisoformat(row["updated_at"]),
             )
 
-    def get_by_hash(self, file_hash: str) -> Optional[CandidateResponse]:
+    def get_by_hash(
+        self,
+        file_hash: str,
+        recruiter_id: Optional[UUID] = None,
+        token: Optional[str] = None,
+    ) -> Optional[CandidateResponse]:
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            query = client.table("candidates").select("*").eq("file_hash", file_hash)
+            if recruiter_id:
+                query = query.eq("recruiter_id", str(recruiter_id))
+            res = query.execute()
+            if not res.data:
+                return None
+            row = res.data[0]
+            prof_data = row["structured_profile"]
+            if isinstance(prof_data, str):
+                prof_data = json.loads(prof_data)
+            return CandidateResponse(
+                id=UUID(row["id"]),
+                recruiter_id=UUID(row["recruiter_id"]) if row.get("recruiter_id") else None,
+                file_name=row["file_name"],
+                storage_path=row["storage_path"],
+                file_hash=row["file_hash"],
+                raw_text=row["raw_text"],
+                structured_profile=CandidateProfile(**prof_data),
+                faiss_index_id=row["faiss_index_id"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
+
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM candidates WHERE file_hash = ?;", (file_hash,))
@@ -85,6 +187,7 @@ class CandidateRepository:
             profile_data = json.loads(row["structured_profile"])
             return CandidateResponse(
                 id=UUID(row["id"]),
+                recruiter_id=UUID(row["recruiter_id"]) if "recruiter_id" in row.keys() else None,
                 file_name=row["file_name"],
                 storage_path=row["storage_path"],
                 file_hash=row["file_hash"],
@@ -95,8 +198,23 @@ class CandidateRepository:
                 updated_at=datetime.fromisoformat(row["updated_at"]),
             )
 
-    def update_faiss_id(self, candidate_id: UUID, faiss_index_id: int) -> bool:
+    def update_faiss_id(
+        self,
+        candidate_id: UUID,
+        faiss_index_id: int,
+        token: Optional[str] = None,
+    ) -> bool:
         now_iso = datetime.now(timezone.utc).isoformat()
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            res = (
+                client.table("candidates")
+                .update({"faiss_index_id": faiss_index_id, "updated_at": now_iso})
+                .eq("id", str(candidate_id))
+                .execute()
+            )
+            return len(res.data) > 0
+
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -106,7 +224,40 @@ class CandidateRepository:
             conn.commit()
             return cursor.rowcount > 0
 
-    def list_all(self, limit: int = 100, offset: int = 0) -> List[CandidateResponse]:
+    def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        recruiter_id: Optional[UUID] = None,
+        token: Optional[str] = None,
+    ) -> List[CandidateResponse]:
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            query = client.table("candidates").select("*").order("created_at", desc=True)
+            if recruiter_id:
+                query = query.eq("recruiter_id", str(recruiter_id))
+            res = query.range(offset, offset + limit - 1).execute()
+            items = []
+            for row in res.data:
+                prof_data = row["structured_profile"]
+                if isinstance(prof_data, str):
+                    prof_data = json.loads(prof_data)
+                items.append(
+                    CandidateResponse(
+                        id=UUID(row["id"]),
+                        recruiter_id=UUID(row["recruiter_id"]) if row.get("recruiter_id") else None,
+                        file_name=row["file_name"],
+                        storage_path=row["storage_path"],
+                        file_hash=row["file_hash"],
+                        raw_text=row["raw_text"],
+                        structured_profile=CandidateProfile(**prof_data),
+                        faiss_index_id=row["faiss_index_id"],
+                        created_at=datetime.fromisoformat(row["created_at"]),
+                        updated_at=datetime.fromisoformat(row["updated_at"]),
+                    )
+                )
+            return items
+
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -120,6 +271,7 @@ class CandidateRepository:
                 items.append(
                     CandidateResponse(
                         id=UUID(row["id"]),
+                        recruiter_id=UUID(row["recruiter_id"]) if "recruiter_id" in row.keys() else None,
                         file_name=row["file_name"],
                         storage_path=row["storage_path"],
                         file_hash=row["file_hash"],
@@ -132,13 +284,31 @@ class CandidateRepository:
                 )
             return items
 
-    def count(self) -> int:
+    def count(self, token: Optional[str] = None) -> int:
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            res = client.table("candidates").select("id", count="exact").execute()
+            return res.count or 0
+
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM candidates;")
             return cursor.fetchone()[0]
 
-    def delete(self, candidate_id: UUID) -> bool:
+    def delete(
+        self,
+        candidate_id: UUID,
+        recruiter_id: Optional[UUID] = None,
+        token: Optional[str] = None,
+    ) -> bool:
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            query = client.table("candidates").delete().eq("id", str(candidate_id))
+            if recruiter_id:
+                query = query.eq("recruiter_id", str(recruiter_id))
+            res = query.execute()
+            return len(res.data) > 0
+
         with self.db._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM candidates WHERE id = ?;", (str(candidate_id),))

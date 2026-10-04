@@ -24,6 +24,7 @@ class JobProfile(BaseModel):
 class JobResponse(BaseModel):
     """API response model for an ingested Job."""
     id: UUID
+    recruiter_id: Optional[UUID] = None
     title: str
     department: Optional[str] = None
     storage_path: str

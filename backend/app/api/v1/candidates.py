@@ -1,12 +1,14 @@
 """
 API endpoints for Candidate Pool Ingestion, Canonical Profiles, and Directory Management.
 Preserves the Single-Candidate Multi-Role Model and SHA-256 Deduplication.
+Secured with Supabase Authentication and PostgreSQL Row Level Security.
 """
 
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
+from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.logging import get_logger
 from app.core.orchestrator import PipelineOrchestrator
 from app.parsers.factory import parse_document
@@ -41,10 +43,11 @@ orchestrator = PipelineOrchestrator(
 )
 async def upload_candidates(
     files: List[UploadFile] = File(..., description="Resume files in PDF or DOCX format"),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[CandidateResponse]:
     """
     Ingests resumes, enforces SHA-256 deduplication, extracts canonical profiles,
-    and indexes embeddings into FAISS.
+    and indexes embeddings into FAISS under recruiter ownership.
     """
     if not files:
         raise HTTPException(status_code=400, detail="No resume files provided")
@@ -61,8 +64,10 @@ async def upload_candidates(
             # 1. Parse document & compute SHA-256 hash
             parsed_doc = parse_document(content, file_name)
 
-            # 2. Check for duplicate candidate file hash (Idempotency)
-            existing_candidate = candidate_repo.get_by_hash(parsed_doc.file_hash)
+            # 2. Check for duplicate candidate file hash within recruiter pool (Idempotency)
+            existing_candidate = candidate_repo.get_by_hash(
+                parsed_doc.file_hash, recruiter_id=user.id, token=user.token
+            )
             if existing_candidate:
                 logger.info(
                     "Resume '%s' with hash %s already exists as candidate ID %s. Returning canonical profile.",
@@ -76,34 +81,39 @@ async def upload_candidates(
             # 3. Extract canonical structured profile via LLM provider
             profile = llm_provider.extract_candidate_profile(parsed_doc.raw_text)
 
-            # 4. Upload file to storage
-            dest_path = f"resumes/{parsed_doc.file_hash[:16]}_{file_name}"
+            # 4. Upload file to private storage bucket organized by user_id
+            dest_path = f"{user.id}/{parsed_doc.file_hash[:16]}_{file_name}"
             storage_path = storage_service.upload_file(
                 bucket="resumes",
                 destination_path=dest_path,
                 content=content,
                 content_type=parsed_doc.file_type,
+                token=user.token,
             )
 
-            # 5. Persist candidate in database
+            # 5. Persist candidate in database with recruiter ownership
             saved_candidate = candidate_repo.create(
                 file_name=file_name,
                 storage_path=storage_path,
                 file_hash=parsed_doc.file_hash,
                 raw_text=parsed_doc.raw_text,
                 structured_profile=profile,
+                recruiter_id=user.id,
+                token=user.token,
             )
 
             # 6. Generate embedding & index in FAISS
             faiss_id = orchestrator.index_candidate(saved_candidate)
             saved_candidate.faiss_index_id = faiss_id
+            candidate_repo.update_faiss_id(saved_candidate.id, faiss_id, token=user.token)
 
             ingested_candidates.append(saved_candidate)
             logger.info(
-                "Ingested candidate '%s' (ID: %s, FAISS ID: %d)",
+                "Ingested candidate '%s' (ID: %s, FAISS ID: %d) for Recruiter %s",
                 profile.full_name,
                 saved_candidate.id,
                 faiss_id,
+                user.id,
             )
 
         except ValueError as ve:
@@ -125,9 +135,10 @@ def list_candidates(
     query: Optional[str] = Query(default=None, description="Search by candidate name or skill"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> List[CandidateResponse]:
-    """Lists candidates from the pool with optional search filtering."""
-    candidates = candidate_repo.list_all(limit=limit, offset=offset)
+    """Lists candidates belonging to the authenticated recruiter pool with optional search filtering."""
+    candidates = candidate_repo.list_all(limit=limit, offset=offset, recruiter_id=user.id, token=user.token)
     if query:
         q_lower = query.lower()
         candidates = [
@@ -146,9 +157,12 @@ def list_candidates(
     response_model=CandidateResponse,
     summary="Get single candidate profile details",
 )
-def get_candidate(candidate_id: UUID) -> CandidateResponse:
+def get_candidate(
+    candidate_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> CandidateResponse:
     """Retrieves full canonical profile for a specific candidate."""
-    cand = candidate_repo.get_by_id(candidate_id)
+    cand = candidate_repo.get_by_id(candidate_id, recruiter_id=user.id, token=user.token)
     if not cand:
         raise HTTPException(status_code=404, detail=f"Candidate with ID '{candidate_id}' not found")
     return cand
@@ -159,9 +173,12 @@ def get_candidate(candidate_id: UUID) -> CandidateResponse:
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete candidate from pool and FAISS index",
 )
-def delete_candidate(candidate_id: UUID) -> None:
+def delete_candidate(
+    candidate_id: UUID,
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> None:
     """Deletes a candidate from PostgreSQL and removes their vector from FAISS."""
-    deleted = candidate_repo.delete(candidate_id)
+    deleted = candidate_repo.delete(candidate_id, recruiter_id=user.id, token=user.token)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Candidate with ID '{candidate_id}' not found")
     faiss_store.delete_candidate(candidate_id)

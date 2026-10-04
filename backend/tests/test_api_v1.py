@@ -9,8 +9,19 @@ from app.main import create_app
 from tests.test_parsers import create_sample_pdf_bytes
 
 
+from uuid import UUID
+from app.core.auth import AuthenticatedUser, get_current_user
+
+
 def test_api_v1_full_workflow():
     app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        email="developer@test.local",
+        full_name="Local Developer",
+        role="recruiter",
+        token=None,
+    )
     client = TestClient(app)
 
     # 1. Upload Job Description

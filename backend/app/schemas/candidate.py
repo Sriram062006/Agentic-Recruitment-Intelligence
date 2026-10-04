@@ -42,6 +42,7 @@ class CandidateProfile(BaseModel):
 class CandidateResponse(BaseModel):
     """API response model for an ingested candidate."""
     id: UUID
+    recruiter_id: Optional[UUID] = None
     file_name: str
     storage_path: str
     file_hash: str

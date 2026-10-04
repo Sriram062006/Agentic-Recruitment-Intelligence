@@ -1,7 +1,7 @@
 """
 Storage service implementation.
 Supports live Supabase Storage buckets ('resumes', 'job-descriptions')
-with seamless fallback to local persistent filesystem storage if Supabase credentials are not active.
+with Row Level Security (RLS) enforcement and seamless local filesystem fallback.
 """
 
 import os
@@ -28,7 +28,12 @@ class SupabaseStorageService(BaseStorageService):
         self.local_base_dir.mkdir(parents=True, exist_ok=True)
         self.client = None
 
-        if self.supabase_url and self.supabase_key and "your_supabase" not in self.supabase_url:
+        if (
+            self.supabase_url
+            and self.supabase_key
+            and "your-project" not in self.supabase_url
+            and "your_supabase" not in self.supabase_url
+        ):
             try:
                 from supabase import create_client
                 self.client = create_client(self.supabase_url, self.supabase_key)
@@ -38,18 +43,30 @@ class SupabaseStorageService(BaseStorageService):
         else:
             logger.info("Supabase storage unconfigured/local mode, using local persistent storage at %s", self.local_base_dir)
 
+    def _get_client(self, token: Optional[str] = None):
+        if not self.supabase_url or not self.supabase_key:
+            return None
+        if token:
+            from supabase import create_client, ClientOptions
+            return create_client(
+                self.supabase_url,
+                self.supabase_key,
+                options=ClientOptions(headers={"Authorization": f"Bearer {token}"}),
+            )
+        return self.client
+
     def upload_file(
         self,
         bucket: str,
         destination_path: str,
         content: bytes,
         content_type: str = "application/octet-stream",
+        token: Optional[str] = None,
     ) -> str:
-        # 1. Try Supabase Storage if configured
-        if self.client:
+        client = self._get_client(token)
+        if client:
             try:
-                # Ensure bucket exists or attempt upload
-                self.client.storage.from_(bucket).upload(
+                client.storage.from_(bucket).upload(
                     path=destination_path,
                     file=content,
                     file_options={"content-type": content_type, "upsert": "true"},
@@ -59,7 +76,7 @@ class SupabaseStorageService(BaseStorageService):
             except Exception as e:
                 logger.warning("Supabase Storage upload failed, falling back to local storage: %s", e)
 
-        # 2. Local filesystem storage
+        # Local filesystem fallback
         bucket_dir = self.local_base_dir / bucket
         bucket_dir.mkdir(parents=True, exist_ok=True)
         target_file = bucket_dir / destination_path
@@ -69,15 +86,20 @@ class SupabaseStorageService(BaseStorageService):
         logger.info("Stored file locally at %s", target_file)
         return f"{bucket}/{destination_path}"
 
-    def download_file(self, bucket: str, storage_path: str) -> bytes:
-        # Strip leading bucket name if included
+    def download_file(
+        self,
+        bucket: str,
+        storage_path: str,
+        token: Optional[str] = None,
+    ) -> bytes:
         rel_path = storage_path
         if rel_path.startswith(f"{bucket}/"):
             rel_path = rel_path[len(bucket) + 1 :]
 
-        if self.client:
+        client = self._get_client(token)
+        if client:
             try:
-                return self.client.storage.from_(bucket).download(rel_path)
+                return client.storage.from_(bucket).download(rel_path)
             except Exception as e:
                 logger.warning("Supabase Storage download failed, checking local storage: %s", e)
 
@@ -87,15 +109,21 @@ class SupabaseStorageService(BaseStorageService):
         with open(local_file, "rb") as f:
             return f.read()
 
-    def delete_file(self, bucket: str, storage_path: str) -> bool:
+    def delete_file(
+        self,
+        bucket: str,
+        storage_path: str,
+        token: Optional[str] = None,
+    ) -> bool:
         rel_path = storage_path
         if rel_path.startswith(f"{bucket}/"):
             rel_path = rel_path[len(bucket) + 1 :]
 
         deleted = False
-        if self.client:
+        client = self._get_client(token)
+        if client:
             try:
-                self.client.storage.from_(bucket).remove([rel_path])
+                client.storage.from_(bucket).remove([rel_path])
                 deleted = True
             except Exception as e:
                 logger.warning("Supabase Storage delete error: %s", e)
