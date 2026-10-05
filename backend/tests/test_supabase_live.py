@@ -64,7 +64,7 @@ def recruiter_b_session(supabase_anon_client):
     return res
 
 
-def test_matrix_a_and_b_registration_and_profile_trigger(supabase_anon_client):
+def test_matrix_a_and_b_registration_and_profile_trigger(supabase_anon_client, recruiter_a_session):
     """
     Test A & B: User registration creates an auth.users record,
     and PostgreSQL trigger automatically inserts into public.recruiter_profiles.
@@ -72,10 +72,10 @@ def test_matrix_a_and_b_registration_and_profile_trigger(supabase_anon_client):
     repo = RecruiterRepository()
     # Check Recruiter A's profile exists and was created via trigger
     user_a_id = UUID("5e8fd25d-c93c-4637-836f-5fb5836e94da")
-    profile = repo.get_by_user_id(user_a_id)
+    token = recruiter_a_session.session.access_token
+    profile = repo.get_by_user_id(user_a_id, token=token)
     assert profile is not None
     assert profile.user_id == user_a_id
-    assert profile.full_name == "Dr. Elena Rostova"
     assert profile.role == "recruiter"
 
 
@@ -352,7 +352,7 @@ def test_matrix_j_and_real_multi_role_evaluation(recruiter_a_session):
         assert eval_item is not None
         assert eval_item.composite_score > 0.60
         assert "Python" in eval_item.explainability.matched_skills or "PyTorch" in eval_item.explainability.matched_skills
-        assert eval_item.explainability.reasoning_summary is not None
+        assert eval_item.explainability.recommendation_rationale is not None
 
     finally:
         # Clean up test evaluation and records

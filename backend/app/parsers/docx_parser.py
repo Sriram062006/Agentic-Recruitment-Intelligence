@@ -1,6 +1,6 @@
 """
 DOCX Document Parser using python-docx.
-Extracts structured paragraphs and tables from Word documents.
+Extracts structured paragraphs, tables, and headers with robust text sanitization.
 """
 
 import hashlib
@@ -9,6 +9,7 @@ from docx import Document
 
 from app.core.logging import get_logger
 from app.parsers.base import BaseDocumentParser, ParsedDocument
+from app.parsers.sanitizer import sanitize_text
 
 logger = get_logger("docx_parser")
 
@@ -40,11 +41,12 @@ class DOCXParser(BaseDocumentParser):
                 if row_cells:
                     extracted_lines.append(" | ".join(row_cells))
 
-        raw_text = "\n\n".join(extracted_lines).strip()
+        raw_combined = "\n\n".join(extracted_lines).strip()
+        cleaned_text = sanitize_text(raw_combined)
         section_count = len(doc.sections)
 
         return ParsedDocument(
-            raw_text=raw_text,
+            raw_text=cleaned_text,
             file_name=file_name,
             file_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             file_hash=file_hash,

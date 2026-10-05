@@ -147,6 +147,14 @@ class DatabaseClient:
                 CONSTRAINT unique_run_candidate_job UNIQUE (run_id, candidate_id, job_id)
             );
             """)
+
+            # Ensure recruiter_id column exists on all local tables
+            for tbl in ["jobs", "candidates", "evaluation_runs", "candidate_evaluations"]:
+                try:
+                    cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN recruiter_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001';")
+                except Exception:
+                    pass
+
             conn.commit()
 
 

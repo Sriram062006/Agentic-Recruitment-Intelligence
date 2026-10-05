@@ -1,39 +1,21 @@
 """
 Gemini LLM Provider implementation with structured JSON output
-and robust deterministic fallback parsing for reproducible offline testing.
+and high-fidelity deterministic fallback extraction.
 Enforces the architectural mandate: LLM NEVER generates or modifies numerical scores.
 """
 
 import json
-import re
 from typing import Any, Dict, List, Optional
 from pydantic import ValidationError
 
 from app.config import get_settings
 from app.core.logging import get_logger
-from app.schemas.candidate import CandidateProfile, EducationEntry, WorkExperienceEntry
+from app.schemas.candidate import CandidateProfile
 from app.schemas.job import JobProfile
 from app.services.llm.base import BaseLLMProvider
+from app.services.llm.extractor import StructuredCandidateExtractor
 
 logger = get_logger("gemini_provider")
-
-TECHNICAL_SKILLS_LEXICON = [
-    "python", "java", "javascript", "typescript", "c++", "c#", "go", "rust", "ruby", "php",
-    "react", "angular", "vue", "next.js", "node.js", "fastapi", "django", "flask", "spring boot",
-    "sql", "postgresql", "mysql", "mongodb", "redis", "elasticsearch", "sqlite",
-    "docker", "kubernetes", "aws", "gcp", "azure", "terraform", "ci/cd", "git", "linux",
-    "machine learning", "deep learning", "nlp", "computer vision", "pytorch", "tensorflow",
-    "sentence transformers", "faiss", "vector search", "llm", "rag", "scikit-learn", "pandas", "numpy",
-    "rest api", "graphql", "microservices", "html", "css", "tailwind css", "agile", "scrum"
-]
-
-DEGREE_HIERARCHY = [
-    ("doctorate", ["phd", "ph.d", "doctorate", "doctoral"]),
-    ("master's", ["master", "ms", "m.s", "m.tech", "msc", "m.sc", "mba"]),
-    ("bachelor's", ["bachelor", "bs", "b.s", "b.tech", "b.e", "ba", "b.a", "bsc", "b.sc"]),
-    ("associate", ["associate", "diploma"]),
-    ("high school", ["high school", "secondary"]),
-]
 
 
 class GeminiLLMProvider(BaseLLMProvider):
@@ -50,7 +32,7 @@ class GeminiLLMProvider(BaseLLMProvider):
             except Exception as e:
                 logger.warning("Could not initialize Google GenAI Client: %s", e)
         else:
-            logger.info("Operating Gemini provider with deterministic rule-based structured extraction")
+            logger.info("Operating Gemini provider with high-fidelity deterministic structured extraction")
 
     def extract_job_profile(self, raw_text: str) -> JobProfile:
         """Transforms raw JD text into a validated JobProfile."""
@@ -69,7 +51,7 @@ class GeminiLLMProvider(BaseLLMProvider):
                     '  "required_qualification": "Doctorate" | "Master\'s" | "Bachelor\'s" | "Associate",\n'
                     '  "key_responsibilities": [string]\n'
                     "}\n\n"
-                    f"Job Description Text:\n{raw_text[:4000]}"
+                    f"Job Description Text:\n{raw_text[:25000]}"
                 )
                 response = self.client.models.generate_content(
                     model="gemini-2.5-flash",
@@ -85,26 +67,68 @@ class GeminiLLMProvider(BaseLLMProvider):
         # Deterministic Fallback Extractor
         return self._extract_job_profile_fallback(raw_text)
 
-    def extract_candidate_profile(self, raw_text: str) -> CandidateProfile:
+    def extract_candidate_profile(self, raw_text: str, file_name: Optional[str] = None) -> CandidateProfile:
         """Transforms raw resume text into a validated CandidateProfile."""
         if self.client:
             try:
                 prompt = (
-                    "Extract the candidate structured profile from the resume text below.\n"
+                    "You are an expert recruitment information extraction engine.\n"
+                    "Extract the candidate structured profile from the full resume text below.\n"
+                    "Capture all meaningful information from summary, skills, experience, projects, education, certifications.\n"
+                    "Do NOT invent information that is not explicitly present in the resume.\n"
                     "Output ONLY valid JSON matching this schema:\n"
                     "{\n"
                     '  "full_name": string,\n'
-                    '  "email": string,\n'
-                    '  "phone": string,\n'
-                    '  "location": string,\n'
+                    '  "email": string or null,\n'
+                    '  "phone": string or null,\n'
+                    '  "location": string or null,\n'
+                    '  "professional_summary": string or null,\n'
                     '  "total_experience_years": float,\n'
                     '  "skills": [string],\n'
-                    '  "experience_history": [{"title": string, "organization": string, "duration_years": float, "summary": string}],\n'
-                    '  "highest_qualification": "Doctorate" | "Master\'s" | "Bachelor\'s" | "Associate",\n'
-                    '  "education": [{"degree": string, "field": string, "institution": string, "graduation_year": int}],\n'
-                    '  "summary": string\n'
+                    '  "skills_by_category": {string: [string]},\n'
+                    '  "experience_history": [\n'
+                    '    {\n'
+                    '      "title": string,\n'
+                    '      "organization": string or null,\n'
+                    '      "location": string or null,\n'
+                    '      "start_date": string or null,\n'
+                    '      "end_date": string or null,\n'
+                    '      "duration_years": float,\n'
+                    '      "responsibilities": [string],\n'
+                    '      "achievements": [string],\n'
+                    '      "technologies": [string],\n'
+                    '      "domain": string or null\n'
+                    '    }\n'
+                    '  ],\n'
+                    '  "highest_qualification": "Doctorate" | "Master\'s" | "Bachelor\'s" | "Associate" | "High School",\n'
+                    '  "education": [\n'
+                    '    {\n'
+                    '      "degree": string,\n'
+                    '      "field": string or null,\n'
+                    '      "institution": string or null,\n'
+                    '      "graduation_year": int or null\n'
+                    '    }\n'
+                    '  ],\n'
+                    '  "certifications": [\n'
+                    '    {\n'
+                    '      "name": string,\n'
+                    '      "issuing_organization": string or null,\n'
+                    '      "year": int or null\n'
+                    '    }\n'
+                    '  ],\n'
+                    '  "projects": [\n'
+                    '    {\n'
+                    '      "name": string,\n'
+                    '      "description": string or null,\n'
+                    '      "technologies": [string],\n'
+                    '      "responsibilities": [string]\n'
+                    '    }\n'
+                    '  ],\n'
+                    '  "languages": [string],\n'
+                    '  "domains": [string],\n'
+                    '  "tools_and_technologies": [string]\n'
                     "}\n\n"
-                    f"Resume Text:\n{raw_text[:4000]}"
+                    f"Full Resume Text:\n{raw_text[:30000]}"
                 )
                 response = self.client.models.generate_content(
                     model="gemini-2.5-flash",
@@ -113,12 +137,14 @@ class GeminiLLMProvider(BaseLLMProvider):
                 )
                 if response and response.text:
                     data = json.loads(response.text)
+                    data["summary"] = data.get("professional_summary")
+                    data["work_experience"] = data.get("experience_history", [])
                     return CandidateProfile(**data)
             except Exception as e:
-                logger.warning("Gemini Resume extraction call failed, using deterministic fallback: %s", e)
+                logger.warning("Gemini Resume extraction call failed, falling back to deterministic extractor: %s", e)
 
-        # Deterministic Fallback Extractor
-        return self._extract_candidate_profile_fallback(raw_text)
+        # High-Fidelity Deterministic Extractor (Extracts actual CV data without dummy placeholders)
+        return StructuredCandidateExtractor.extract(raw_text, file_name=file_name)
 
     def synthesize_fitment_explanation(
         self,
@@ -158,15 +184,15 @@ class GeminiLLMProvider(BaseLLMProvider):
             except Exception as e:
                 logger.warning("Gemini explanation synthesis failed, using grounded fallback: %s", e)
 
-        # Deterministic Grounded Narrative Synthesizer
+        # Grounded Narrative Synthesizer
         strengths = []
         if matched_skills:
-            strengths.append(f"Demonstrated proficiency in key core competencies: {', '.join(matched_skills[:4])}.")
+            strengths.append(f"Demonstrated proficiency in key core competencies: {', '.join(matched_skills[:5])}.")
         strengths.append(f"Experience alignment: {experience_summary}.")
 
         skill_gaps = []
         if missing_skills:
-            skill_gaps.append(f"Lacks explicit verification in required role skills: {', '.join(missing_skills[:4])}.")
+            skill_gaps.append(f"Lacks explicit verification in required role skills: {', '.join(missing_skills[:5])}.")
         else:
             skill_gaps.append("No critical missing required skills detected.")
 
@@ -178,12 +204,12 @@ class GeminiLLMProvider(BaseLLMProvider):
         elif len(matched_skills) >= len(missing_skills):
             rationale = (
                 f"{candidate_name} demonstrates viable candidate potential for {job_title} "
-                f"with substantial core skills ({', '.join(matched_skills[:3])}), though exhibiting gaps in {', '.join(missing_skills[:2])}."
+                f"with substantial core skills ({', '.join(matched_skills[:3])}), though exhibiting gaps in {', '.join(missing_skills[:3])}."
             )
         else:
             rationale = (
                 f"{candidate_name} presents limited domain overlap for {job_title} "
-                f"due to multiple key required skill gaps ({', '.join(missing_skills[:3])})."
+                f"due to multiple key required skill gaps ({', '.join(missing_skills[:4])})."
             )
 
         return {
@@ -192,12 +218,10 @@ class GeminiLLMProvider(BaseLLMProvider):
             "recommendation_rationale": rationale,
         }
 
-    # ------------------ Fallback Parsers ------------------
+    # ------------------ Fallback Job Extractor ------------------
 
     def _extract_job_profile_fallback(self, raw_text: str) -> JobProfile:
-        text_lower = raw_text.lower()
-
-        # Extract title
+        import re
         lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
         title = lines[0] if lines else "Software Engineer"
         for l in lines[:5]:
@@ -205,20 +229,19 @@ class GeminiLLMProvider(BaseLLMProvider):
                 title = l.split(":")[-1].strip()
                 break
 
-        # Extract skills
-        found_skills = [s.title() for s in TECHNICAL_SKILLS_LEXICON if re.search(r"\b" + re.escape(s) + r"\b", text_lower)]
+        from app.services.llm.extractor import CANONICAL_SKILL_CASING, DEGREE_HIERARCHY
+        text_lower = raw_text.lower()
+        found_skills = [proper for kw, proper in CANONICAL_SKILL_CASING.items() if re.search(r"\b" + re.escape(kw) + r"\b", text_lower)]
         required_skills = found_skills[: max(1, int(len(found_skills) * 0.75))]
         preferred_skills = found_skills[len(required_skills) :]
 
-        # Extract experience years
         exp_match = re.search(r"(\d+)\+?\s*(?:-\s*(\d+))?\s*(?:years|yrs)", text_lower)
         min_exp = float(exp_match.group(1)) if exp_match else 2.0
 
-        # Extract degree
         req_qual = "Bachelor's"
         for tier_name, aliases in DEGREE_HIERARCHY:
             if any(re.search(r"\b" + re.escape(alias) + r"\b", text_lower) for alias in aliases):
-                req_qual = tier_name.title()
+                req_qual = tier_name
                 break
 
         return JobProfile(
@@ -230,60 +253,4 @@ class GeminiLLMProvider(BaseLLMProvider):
             min_experience_years=min_exp,
             required_qualification=req_qual,
             key_responsibilities=["Develop and maintain backend services", "Collaborate with cross-functional teams"],
-        )
-
-    def _extract_candidate_profile_fallback(self, raw_text: str) -> CandidateProfile:
-        text_lower = raw_text.lower()
-        lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
-
-        # Name
-        name = lines[0] if lines else "Candidate"
-        if len(name.split()) > 4:
-            name = "Candidate Professional"
-
-        # Email & Phone
-        email_match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", raw_text)
-        email = email_match.group(0) if email_match else "candidate@example.com"
-        phone_match = re.search(r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", raw_text)
-        phone = phone_match.group(0) if phone_match else "+1-555-0100"
-
-        # Skills
-        skills = [s.title() for s in TECHNICAL_SKILLS_LEXICON if re.search(r"\b" + re.escape(s) + r"\b", text_lower)]
-
-        # Experience
-        exp_match = re.search(r"(\d+)\+?\s*(?:years|yrs)\s*(?:of\s*)?experience", text_lower)
-        total_exp = float(exp_match.group(1)) if exp_match else 3.5
-
-        # Qualification
-        highest_deg = "Bachelor's"
-        for tier_name, aliases in DEGREE_HIERARCHY:
-            if any(re.search(r"\b" + re.escape(alias) + r"\b", text_lower) for alias in aliases):
-                highest_deg = tier_name.title()
-                break
-
-        return CandidateProfile(
-            full_name=name,
-            email=email,
-            phone=phone,
-            location="San Francisco, CA",
-            total_experience_years=total_exp,
-            skills=skills or ["Python", "SQL", "Git"],
-            experience_history=[
-                WorkExperienceEntry(
-                    title="Software Developer",
-                    organization="TechCorp",
-                    duration_years=total_exp,
-                    summary="Backend API development, system architecture, database design",
-                )
-            ],
-            highest_qualification=highest_deg,
-            education=[
-                EducationEntry(
-                    degree=highest_deg,
-                    field="Computer Science",
-                    institution="State University",
-                    graduation_year=2021,
-                )
-            ],
-            summary=f"Experienced professional with {total_exp} years working with {', '.join(skills[:3])}.",
         )

@@ -35,18 +35,82 @@ logger = get_logger("orchestrator")
 
 
 def build_candidate_semantic_text(profile: CandidateProfile) -> str:
-    """Builds a dense textual representation of candidate qualifications for embedding."""
-    skills_str = ", ".join(profile.skills)
-    exp_titles = [e.title for e in profile.experience_history if e.title]
-    exp_str = ", ".join(exp_titles)
-    return (
+    """
+    Builds a deterministic, rich textual representation of candidate qualifications for Sentence Transformers.
+    Incorporates: Professional Summary + Skills + Work Experience + Responsibilities +
+    Projects + Education + Certifications + Technologies + Domains.
+    """
+    parts = []
+
+    # 1. Candidate Overview & Summary
+    summary = profile.professional_summary or profile.summary or ""
+    parts.append(
         f"Candidate: {profile.full_name}. "
-        f"Verified Experience: {profile.total_experience_years} years. "
+        f"Total Experience: {profile.total_experience_years} years. "
         f"Highest Qualification: {profile.highest_qualification}. "
-        f"Roles: {exp_str}. "
-        f"Key Skills: {skills_str}. "
-        f"Summary: {profile.summary or ''}"
-    ).strip()
+        f"Professional Summary: {summary}"
+    )
+
+    # 2. Canonical Skills
+    if profile.skills:
+        parts.append(f"Core Skills: {', '.join(profile.skills)}.")
+
+    # 3. Work Experience with Responsibilities & Technologies
+    if profile.experience_history:
+        exp_details = []
+        for e in profile.experience_history:
+            role_desc = f"{e.title}"
+            if e.organization:
+                role_desc += f" at {e.organization}"
+            if e.duration_years:
+                role_desc += f" ({e.duration_years} years)"
+            if e.responsibilities:
+                role_desc += f" - Duties: {'; '.join(e.responsibilities[:3])}"
+            if e.technologies:
+                role_desc += f" - Tech: {', '.join(e.technologies[:6])}"
+            exp_details.append(role_desc)
+        parts.append(f"Career History: {' | '.join(exp_details)}.")
+
+    # 4. Notable Projects
+    if profile.projects:
+        proj_details = []
+        for p in profile.projects:
+            p_str = p.name
+            if p.description:
+                p_str += f": {p.description}"
+            if p.technologies:
+                p_str += f" (Tech: {', '.join(p.technologies)})"
+            proj_details.append(p_str)
+        parts.append(f"Projects: {' | '.join(proj_details)}.")
+
+    # 5. Education Credentials
+    if profile.education:
+        edu_details = []
+        for ed in profile.education:
+            ed_str = ed.degree
+            if ed.field:
+                ed_str += f" in {ed.field}"
+            if ed.institution:
+                ed_str += f" from {ed.institution}"
+            if ed.graduation_year:
+                ed_str += f" ({ed.graduation_year})"
+            edu_details.append(ed_str)
+        parts.append(f"Education: {', '.join(edu_details)}.")
+
+    # 6. Certifications
+    if profile.certifications:
+        cert_names = [f"{c.name} ({c.issuing_organization or 'Certified'})" for c in profile.certifications]
+        parts.append(f"Certifications: {', '.join(cert_names)}.")
+
+    # 7. Domains & Industries
+    if profile.domains:
+        parts.append(f"Industry Domains: {', '.join(profile.domains)}.")
+
+    # 8. Languages
+    if profile.languages:
+        parts.append(f"Languages: {', '.join(profile.languages)}.")
+
+    return "\n".join(p for p in parts if p.strip()).strip()
 
 
 def build_job_semantic_text(profile: JobProfile) -> str:

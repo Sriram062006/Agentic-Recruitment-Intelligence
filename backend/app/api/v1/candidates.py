@@ -79,7 +79,7 @@ async def upload_candidates(
                 continue
 
             # 3. Extract canonical structured profile via LLM provider
-            profile = llm_provider.extract_candidate_profile(parsed_doc.raw_text)
+            profile = llm_provider.extract_candidate_profile(parsed_doc.raw_text, file_name=file_name)
 
             # 4. Upload file to private storage bucket organized by user_id
             dest_path = f"{user.id}/{parsed_doc.file_hash[:16]}_{file_name}"

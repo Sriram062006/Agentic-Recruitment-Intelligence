@@ -1,7 +1,14 @@
 export interface WorkExperienceEntry {
   title: string;
   organization?: string;
+  location?: string;
+  start_date?: string;
+  end_date?: string;
   duration_years: number;
+  responsibilities?: string[];
+  achievements?: string[];
+  technologies?: string[];
+  domain?: string;
   summary?: string;
 }
 
@@ -12,21 +19,57 @@ export interface EducationEntry {
   graduation_year?: number;
 }
 
+export interface CertificationEntry {
+  name: string;
+  issuing_organization?: string;
+  year?: number;
+}
+
+export interface ProjectEntry {
+  name: string;
+  description?: string;
+  technologies?: string[];
+  responsibilities?: string[];
+  outcomes?: string;
+}
+
+export interface PersonalInformation {
+  full_name: string;
+  email?: string;
+  phone?: string;
+  location?: string;
+  linkedin?: string;
+  github?: string;
+  portfolio?: string;
+}
+
 export interface CandidateProfile {
   full_name: string;
   email?: string;
   phone?: string;
   location?: string;
+  personal_information?: PersonalInformation;
+  professional_summary?: string;
+  summary?: string;
   total_experience_years: number;
   skills: string[];
+  skills_by_category?: Record<string, string[]>;
   experience_history: WorkExperienceEntry[];
+  work_experience?: WorkExperienceEntry[];
   highest_qualification: string;
   education: EducationEntry[];
-  summary?: string;
+  certifications?: CertificationEntry[];
+  projects?: ProjectEntry[];
+  languages?: string[];
+  achievements?: string[];
+  domains?: string[];
+  tools_and_technologies?: string[];
+  source_text?: string;
 }
 
 export interface CandidateResponse {
   id: string;
+  recruiter_id?: string;
   file_name: string;
   storage_path: string;
   file_hash: string;
@@ -35,4 +78,15 @@ export interface CandidateResponse {
   faiss_index_id?: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface CandidateSummary {
+  id: string;
+  full_name: string;
+  file_name: string;
+  total_experience_years: number;
+  highest_qualification: string;
+  skills_count: number;
+  faiss_indexed: boolean;
+  created_at: string;
 }
