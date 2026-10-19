@@ -1,219 +1,213 @@
 import React, { useEffect, useState } from "react";
-import { checkBackendHealth } from "@/lib/api-client";
+import { checkBackendHealth, fetchCandidates, fetchJobs, fetchEvaluationRuns } from "@/lib/api-client";
 import {
   CheckCircle2,
   XCircle,
   RefreshCw,
   Server,
-  Cpu,
-  Database,
+  Users,
+  Briefcase,
+  Grid3X3,
   ShieldCheck,
+  TrendingUp,
 } from "lucide-react";
 
 export const WorkspaceView: React.FC = () => {
   const [backendStatus, setBackendStatus] = useState<string>("Checking...");
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [lastChecked, setLastChecked] = useState<string>("");
 
-  const verifyConnection = async () => {
+  const [candidateCount, setCandidateCount] = useState<number>(0);
+  const [jobCount, setJobCount] = useState<number>(0);
+  const [runsCount, setRunsCount] = useState<number>(0);
+  const [totalEvals, setTotalEvals] = useState<number>(0);
+
+  const loadDashboardData = async () => {
     setIsLoading(true);
-    const result = await checkBackendHealth();
-    setIsConnected(result.connected);
-    setBackendStatus(result.statusText);
-    setLastChecked(new Date().toLocaleTimeString());
-    setIsLoading(false);
+    try {
+      const [health, cands, jobs, runs] = await Promise.all([
+        checkBackendHealth(),
+        fetchCandidates().catch(() => []),
+        fetchJobs().catch(() => []),
+        fetchEvaluationRuns().catch(() => []),
+      ]);
+
+      setIsConnected(health.connected);
+      setBackendStatus(health.statusText);
+
+      setCandidateCount(cands.length);
+      setJobCount(jobs.length);
+      setRunsCount(runs.length);
+
+      const evalsSum = runs.reduce((acc, r) => acc + (r.total_evaluations || 0), 0);
+      setTotalEvals(evalsSum);
+    } catch (err) {
+      console.error("Dashboard data load error:", err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   useEffect(() => {
-    verifyConnection();
+    loadDashboardData();
   }, []);
 
   return (
     <div className="min-h-[calc(100vh-73px)] bg-slate-50 p-6 md:p-10">
-      <div className="mx-auto max-w-5xl space-y-8">
-        {/* Foundation Notification Banner */}
-        <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-6 shadow-sm">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-1">
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-800">
+      <div className="mx-auto max-w-6xl space-y-8">
+        {/* Executive Banner */}
+        <div className="rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-slate-50 p-6 sm:p-8 shadow-xs">
+          <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
                 <ShieldCheck className="h-3.5 w-3.5" />
-                Phase 1 Foundation Active
+                Enterprise Recruitment Intelligence
               </div>
-              <h2 className="text-xl font-bold text-gray-900">
-                Agentic AI Recruitment Intelligence Platform
-              </h2>
-              <p className="text-sm text-gray-600">
-                Core repository structure, backend services, and frontend application shell are initialized and operational.
+              <h1 className="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
+                Recruitment Intelligence Workspace
+              </h1>
+              <p className="max-w-2xl text-xs sm:text-sm text-gray-600 leading-relaxed">
+                Autonomous talent fitment and multi-role evaluation platform. Grounded, explainable AI matching candidates to requisitions with full source document fidelity.
               </p>
             </div>
 
-            {/* Live Backend Status Badge */}
-            <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-              <Server className="h-5 w-5 text-gray-500" />
-              <div className="text-left">
-                <div className="text-xs font-medium text-gray-500">Backend Status</div>
-                <div className="flex items-center gap-1.5 text-sm font-bold">
+            {/* Health & Live Indicator */}
+            <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white p-3.5 shadow-xs">
+              <Server className="h-5 w-5 text-gray-400" />
+              <div>
+                <div className="text-[11px] font-medium text-gray-500">Platform Services</div>
+                <div className="flex items-center gap-1.5 text-xs font-bold">
                   {isLoading ? (
-                    <span className="flex items-center gap-1 text-gray-500">
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                      Testing...
+                    <span className="flex items-center gap-1 text-gray-400">
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                      Checking...
                     </span>
                   ) : isConnected ? (
                     <span className="flex items-center gap-1 text-emerald-600">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Connected
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Operational
                     </span>
                   ) : (
                     <span className="flex items-center gap-1 text-rose-600">
-                      <XCircle className="h-4 w-4" />
+                      <XCircle className="h-3.5 w-3.5" />
                       {backendStatus}
                     </span>
                   )}
                 </div>
               </div>
               <button
-                onClick={verifyConnection}
+                onClick={loadDashboardData}
                 disabled={isLoading}
-                title="Refresh Backend Health"
-                className="ml-2 inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                title="Refresh Metrics"
+                className="ml-2 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
               >
-                <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+                <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`} />
               </button>
             </div>
           </div>
-          {lastChecked && (
-            <p className="mt-2 text-xs text-gray-400">
-              Last health check queried at: {lastChecked} via <code className="text-blue-700">GET /api/health</code>
-            </p>
-          )}
         </div>
 
-        {/* Foundation Modules Status */}
-        <div className="grid gap-6 md:grid-cols-3">
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-indigo-50 p-2.5 text-indigo-600">
-                <Server className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">FastAPI Backend</h3>
-                <p className="text-xs text-gray-500">REST API & App Factory</p>
+        {/* Executive Metric Cards */}
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs transition-shadow hover:shadow-md">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500">Candidate Pool</span>
+              <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
+                <Users className="h-4 w-4" />
               </div>
             </div>
-            <div className="mt-4 space-y-2 text-xs text-gray-600">
-              <div className="flex justify-between border-b pb-1">
-                <span>Health Endpoint</span>
-                <span className="font-mono text-emerald-600">/api/health (200 OK)</span>
-              </div>
-              <div className="flex justify-between border-b pb-1">
-                <span>OpenAPI Docs</span>
-                <span className="font-mono text-gray-700">/docs</span>
-              </div>
-              <div className="flex justify-between">
-                <span>CORS Policy</span>
-                <span className="text-gray-700">Local Dev Whitelist</span>
-              </div>
+            <div className="mt-3 text-2xl font-bold text-gray-900">{candidateCount}</div>
+            <div className="mt-1 text-[11px] text-gray-500">
+              Active profiles indexed for evaluation
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-blue-50 p-2.5 text-blue-600">
-                <Cpu className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">Config & Parameters</h3>
-                <p className="text-xs text-gray-500">Pydantic BaseSettings</p>
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs transition-shadow hover:shadow-md">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500">Job Requisitions</span>
+              <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
+                <Briefcase className="h-4 w-4" />
               </div>
             </div>
-            <div className="mt-4 space-y-2 text-xs text-gray-600">
-              <div className="flex justify-between border-b pb-1">
-                <span>Baseline Weights</span>
-                <span className="text-gray-700">35 / 35 / 20 / 10</span>
-              </div>
-              <div className="flex justify-between border-b pb-1">
-                <span>Heuristics (α, β)</span>
-                <span className="text-gray-700">0.80 / 1.50 (Configurable)</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Classification Cuts</span>
-                <span className="text-gray-700">0.75 / 0.50 (Experimental)</span>
-              </div>
+            <div className="mt-3 text-2xl font-bold text-gray-900">{jobCount}</div>
+            <div className="mt-1 text-[11px] text-gray-500">
+              Active structured role specifications
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-teal-50 p-2.5 text-teal-600">
-                <Database className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">Target Pipeline</h3>
-                <p className="text-xs text-gray-500">Multi-Role Research Model</p>
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs transition-shadow hover:shadow-md">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500">Evaluation Runs</span>
+              <div className="rounded-lg bg-emerald-50 p-2 text-emerald-600">
+                <Grid3X3 className="h-4 w-4" />
               </div>
             </div>
-            <div className="mt-4 space-y-2 text-xs text-gray-600">
-              <div className="flex justify-between border-b pb-1">
-                <span>Resume Processing</span>
-                <span className="text-gray-700">Single Profile / Candidate</span>
+            <div className="mt-3 text-2xl font-bold text-gray-900">{runsCount}</div>
+            <div className="mt-1 text-[11px] text-gray-500">
+              Persistent multi-role evaluation batches
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs transition-shadow hover:shadow-md">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500">Total Evaluations</span>
+              <div className="rounded-lg bg-amber-50 p-2 text-amber-600">
+                <TrendingUp className="h-4 w-4" />
               </div>
-              <div className="flex justify-between border-b pb-1">
-                <span>Multi-Role Eval</span>
-                <span className="text-gray-700">Independent Matrix (N × M)</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Numerical Scoring</span>
-                <span className="font-medium text-emerald-600">100% Deterministic</span>
-              </div>
+            </div>
+            <div className="mt-3 text-2xl font-bold text-gray-900">{totalEvals}</div>
+            <div className="mt-1 text-[11px] text-gray-500">
+              Evidence-validated fitment assessments
             </div>
           </div>
         </div>
 
-        {/* Phase Roadmap Progression View */}
-        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-bold text-gray-900">Implementation Progression</h3>
-              <p className="text-xs text-gray-500">Phased research architecture sequence</p>
-            </div>
-            <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
-              Phase 1 of 17
-            </span>
+        {/* Intelligence Workflow Highlights */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 sm:p-8 shadow-xs">
+          <div className="mb-6">
+            <h2 className="text-base font-bold text-gray-900">Recruitment Intelligence Pipeline</h2>
+            <p className="text-xs text-gray-500">End-to-end evidence-grounded candidate evaluation process</p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-            <div className="rounded-lg border-2 border-emerald-500 bg-emerald-50/50 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-emerald-900">Phase 1: Project Foundation</span>
-                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-[11px] font-bold text-white">1</div>
+                <span className="text-xs font-bold text-gray-900">Ingest & Structure</span>
               </div>
-              <p className="mt-1 text-xs text-emerald-700">Repository, FastAPI, config, logging, test suite, and Vite shell.</p>
+              <p className="text-[11px] text-gray-600 leading-relaxed">
+                Full-fidelity resume extraction preserving career history, verified tenures, overlapping interval normalization, and skills.
+              </p>
             </div>
 
-            <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3 opacity-75">
-              <span className="text-xs font-bold text-gray-700">Phase 2: Supabase DB + Storage</span>
-              <p className="mt-1 text-xs text-gray-500">PostgreSQL DDL, tables, constraints, bucket storage setup.</p>
+            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white">2</div>
+                <span className="text-xs font-bold text-gray-900">Define Criteria</span>
+              </div>
+              <p className="text-[11px] text-gray-600 leading-relaxed">
+                Structured Job Descriptions with explicit must-have and should-have competencies, minimum seniority, and key responsibilities.
+              </p>
             </div>
 
-            <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3 opacity-75">
-              <span className="text-xs font-bold text-gray-700">Phase 3: Document Parsing</span>
-              <p className="mt-1 text-xs text-gray-500">PyMuPDF and python-docx text extraction engines.</p>
+            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-purple-600 text-[11px] font-bold text-white">3</div>
+                <span className="text-xs font-bold text-gray-900">AI Contextual Fitment</span>
+              </div>
+              <p className="text-[11px] text-gray-600 leading-relaxed">
+                Google Gemini reasoning models evaluate actual candidate profiles against complete requirements with internal score consistency review.
+              </p>
             </div>
 
-            <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3 opacity-75">
-              <span className="text-xs font-bold text-gray-700">Phase 4: LLM Structured Extraction</span>
-              <p className="mt-1 text-xs text-gray-500">Gemini Pydantic schema normalization for JDs and resumes.</p>
-            </div>
-
-            <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3 opacity-75">
-              <span className="text-xs font-bold text-gray-700">Phase 5: Embeddings & Vector Index</span>
-              <p className="mt-1 text-xs text-gray-500">Sentence Transformers (all-MiniLM-L6-v2) & FAISS IndexFlatIP.</p>
-            </div>
-
-            <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-3 opacity-75">
-              <span className="text-xs font-bold text-gray-700">Phases 6–17: Fitment & Frontend</span>
-              <p className="mt-1 text-xs text-gray-500">Multi-role scoring, explainability, matrix views, benchmarks.</p>
+            <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">4</div>
+                <span className="text-xs font-bold text-gray-900">Decision Support</span>
+              </div>
+              <p className="text-[11px] text-gray-600 leading-relaxed">
+                Post-LLM evidence validation, missing skills classification, targeted interview verification questions, and persistent audit logs.
+              </p>
             </div>
           </div>
         </div>

@@ -189,16 +189,38 @@ class FAISSVectorStore(BaseVectorStore):
             return
 
         loaded_index = faiss.read_index(str(self.index_path))
-        self.index = loaded_index
 
         with open(self.mapping_path, "r", encoding="utf-8") as f:
             mapping_data = json.load(f)
 
-        self._next_faiss_id = mapping_data.get("next_id", 1)
-        raw_mappings = mapping_data.get("mappings", {})
+        if "mappings" in mapping_data:
+            self._next_faiss_id = mapping_data.get("next_id", 1)
+            raw_mappings = mapping_data.get("mappings", {})
+        else:
+            raw_mappings = mapping_data
+            self._next_faiss_id = len(raw_mappings) + 1
 
         self._id_to_uuid = {int(k): UUID(v) for k, v in raw_mappings.items()}
         self._uuid_to_id = {UUID(v): int(k) for k, v in raw_mappings.items()}
+
+        if not isinstance(loaded_index, (faiss.IndexIDMap, faiss.IndexIDMap2)):
+            raw_flat = faiss.IndexFlatIP(self.dimension)
+            new_id_map = faiss.IndexIDMap2(raw_flat)
+            if loaded_index.ntotal > 0:
+                ids_list = sorted(self._id_to_uuid.keys())
+                if len(ids_list) == loaded_index.ntotal:
+                    for i, fid in enumerate(ids_list):
+                        v = loaded_index.reconstruct(i).reshape(1, -1).astype(np.float32)
+                        new_id_map.add_with_ids(v, np.array([fid], dtype=np.int64))
+                else:
+                    for i in range(loaded_index.ntotal):
+                        v = loaded_index.reconstruct(i).reshape(1, -1).astype(np.float32)
+                        new_id_map.add_with_ids(v, np.array([i], dtype=np.int64))
+            self.index = new_id_map
+            self.save()
+        else:
+            self.index = loaded_index
+
         logger.info("Loaded FAISS index with %d vectors from %s", self.index.ntotal, self.index_path)
 
 

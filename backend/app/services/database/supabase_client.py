@@ -55,7 +55,7 @@ class DatabaseClient:
         """Returns a Supabase client, scoped with user token if provided for RLS enforcement."""
         if not self.is_supabase_active:
             return None
-        if token:
+        if token and len(token.split(".")) == 3:
             from supabase import create_client, ClientOptions
             return create_client(
                 self.settings.supabase_url,
@@ -78,7 +78,9 @@ class DatabaseClient:
             CREATE TABLE IF NOT EXISTS recruiter_profiles (
                 user_id TEXT PRIMARY KEY,
                 full_name TEXT NOT NULL,
+                email TEXT,
                 role TEXT NOT NULL DEFAULT 'recruiter',
+                is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -147,6 +149,16 @@ class DatabaseClient:
                 CONSTRAINT unique_run_candidate_job UNIQUE (run_id, candidate_id, job_id)
             );
             """)
+
+            # Ensure email and is_active columns exist on local recruiter_profiles
+            try:
+                cursor.execute("ALTER TABLE recruiter_profiles ADD COLUMN email TEXT;")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE recruiter_profiles ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;")
+            except Exception:
+                pass
 
             # Ensure recruiter_id column exists on all local tables
             for tbl in ["jobs", "candidates", "evaluation_runs", "candidate_evaluations"]:

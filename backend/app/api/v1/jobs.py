@@ -1,13 +1,17 @@
 """
 API endpoints for Job Description Ingestion and Management.
-Secured with Supabase Authentication and PostgreSQL Row Level Security.
+Secured with Supabase Authentication, RBAC, and PostgreSQL Row Level Security.
 """
 
 from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.auth import (
+    AuthenticatedUser,
+    require_any_authenticated,
+    require_recruiter_or_admin,
+)
 from app.core.logging import get_logger
 from app.parsers.factory import parse_document
 from app.schemas.job import JobProfile, JobResponse
@@ -31,7 +35,7 @@ llm_provider = GeminiLLMProvider()
 )
 async def upload_jobs(
     files: List[UploadFile] = File(..., description="Job Description documents in PDF or DOCX format"),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_recruiter_or_admin),
 ) -> List[JobResponse]:
     """Ingests job descriptions, parses text, extracts structured profiles, and persists records under recruiter ownership."""
     if not files:
@@ -50,7 +54,7 @@ async def upload_jobs(
             parsed_doc = parse_document(content, file_name)
 
             # 2. Extract structured profile via LLM provider
-            job_profile = llm_provider.extract_job_profile(parsed_doc.raw_text)
+            job_profile = llm_provider.extract_job_profile(parsed_doc.raw_text, file_name=file_name)
 
             # 3. Store file in storage (isolated folder per recruiter user_id)
             dest_path = f"{user.id}/{parsed_doc.file_hash[:16]}_{file_name}"
@@ -93,10 +97,11 @@ async def upload_jobs(
 def list_jobs(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_any_authenticated),
 ) -> List[JobResponse]:
-    """Lists ingested job descriptions belonging to the authenticated recruiter."""
-    return job_repo.list_all(limit=limit, offset=offset, recruiter_id=user.id, token=user.token)
+    """Lists ingested job descriptions belonging to the authenticated recruiter or all jobs for admin."""
+    scoped_recruiter_id = None if user.role == "admin" else user.id
+    return job_repo.list_all(limit=limit, offset=offset, recruiter_id=scoped_recruiter_id, token=user.token)
 
 
 @router.get(
@@ -106,13 +111,58 @@ def list_jobs(
 )
 def get_job(
     job_id: UUID,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_any_authenticated),
 ) -> JobResponse:
     """Retrieves structured profile and text for a specific Job Description."""
-    job = job_repo.get_by_id(job_id, recruiter_id=user.id, token=user.token)
+    scoped_recruiter_id = None if user.role == "admin" else user.id
+    job = job_repo.get_by_id(job_id, recruiter_id=scoped_recruiter_id, token=user.token)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job Description with ID '{job_id}' not found")
     return job
+
+
+@router.get(
+    "/{job_id}/file",
+    summary="Download or view original Job Description file",
+)
+def get_job_file(
+    job_id: UUID,
+    user: AuthenticatedUser = Depends(require_any_authenticated),
+):
+    """Streams original Job Description document (PDF/DOCX) from Supabase Storage for reference."""
+    scoped_recruiter_id = None if user.role == "admin" else user.id
+    job = job_repo.get_by_id(job_id, recruiter_id=scoped_recruiter_id, token=user.token)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job Description with ID '{job_id}' not found")
+
+    try:
+        content = storage_service.download_file("job-descriptions", job.storage_path, token=user.token)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Job document file not found in storage for job '{job_id}'")
+    except Exception as e:
+        logger.error("Failed to download job document file: %s", e)
+        raise HTTPException(status_code=500, detail=f"Storage retrieval error: {str(e)}")
+
+    fname_lower = job.storage_path.lower()
+    if fname_lower.endswith(".pdf"):
+        media_type = "application/pdf"
+    elif fname_lower.endswith(".docx"):
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif fname_lower.endswith(".doc"):
+        media_type = "application/msword"
+    else:
+        media_type = "application/octet-stream"
+
+    filename = job.storage_path.split("/")[-1] if "/" in job.storage_path else f"{job.title}.pdf"
+    from fastapi.responses import Response
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
 
 
 @router.delete(
@@ -122,7 +172,7 @@ def get_job(
 )
 def delete_job(
     job_id: UUID,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_recruiter_or_admin),
 ) -> None:
     """Deletes a job description and its associated records."""
     deleted = job_repo.delete(job_id, recruiter_id=user.id, token=user.token)

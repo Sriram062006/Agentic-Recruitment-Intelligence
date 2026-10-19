@@ -31,3 +31,13 @@ class BaseLLMProvider(ABC):
     ) -> Dict[str, Any]:
         """Synthesizes human-readable strengths, skill gaps, and recommendation rationale from deterministic evidence."""
         pass
+
+    def analyze_requirements(
+        self,
+        candidate: CandidateProfile,
+        job: JobProfile,
+        candidate_raw_text: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Evaluates each job requirement against candidate profile and extracts grounded evidence."""
+        return []
+

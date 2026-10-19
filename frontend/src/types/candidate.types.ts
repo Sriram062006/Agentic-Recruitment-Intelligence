@@ -52,6 +52,10 @@ export interface CandidateProfile {
   professional_summary?: string;
   summary?: string;
   total_experience_years: number;
+  experience_years_source?: "calculated" | "manual" | string;
+  experience_years_original_calculated?: number;
+  experience_years_updated_by?: string;
+  experience_years_updated_at?: string;
   skills: string[];
   skills_by_category?: Record<string, string[]>;
   experience_history: WorkExperienceEntry[];
@@ -65,6 +69,7 @@ export interface CandidateProfile {
   domains?: string[];
   tools_and_technologies?: string[];
   source_text?: string;
+  is_synthetic?: boolean;
 }
 
 export interface CandidateResponse {
@@ -76,6 +81,7 @@ export interface CandidateResponse {
   raw_text: string;
   structured_profile: CandidateProfile;
   faiss_index_id?: number;
+  is_synthetic?: boolean;
   created_at: string;
   updated_at: string;
 }

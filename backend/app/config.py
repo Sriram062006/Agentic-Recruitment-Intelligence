@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[".env", "backend/.env"],
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = Field(
         default=None,
         description="Google Gemini API key for structured extraction",
+    )
+    gemini_model: str = Field(
+        default="gemini-2.5-flash",
+        description="Google Gemini model name for structured extraction (e.g. gemini-2.5-flash, gemini-2.5-flash-lite)",
+    )
+    gemini_fitment_model: str = Field(
+        default="gemini-3.1-pro-preview",
+        description="Google Gemini model for deep reasoning fitment evaluation (fallback: gemini-2.5-pro, gemini-2.5-flash)",
+    )
+    gemini_preprocessing_model: str = Field(
+        default="gemini-2.5-flash",
+        description="Google Gemini model for fast preprocessing and parsing",
     )
     supabase_url: Optional[str] = Field(
         default=None,

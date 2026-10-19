@@ -17,6 +17,7 @@ export interface EvaluationConfigRequest {
   candidate_ids?: string[];
   weights?: FitmentWeightsConfig;
   heuristics?: HeuristicConfig;
+  evaluation_engine?: "ai_fitment" | "deterministic" | string;
 }
 
 export interface ExperienceComparison {
@@ -32,25 +33,59 @@ export interface QualificationComparison {
   status: string;
 }
 
+export interface RequirementAnalysisItem {
+  requirement: string;
+  type?: "MUST_HAVE" | "SHOULD_HAVE" | "RESPONSIBILITY" | "QUALIFICATION" | string;
+  status: "MATCHED" | "PARTIALLY MATCHED" | "PARTIALLY_MATCHED" | "MISSING" | "UNKNOWN" | string;
+  evidence: string;
+  validation_status?: "VERIFIED" | "PARTIALLY_VERIFIED" | "UNSUPPORTED" | string;
+}
+
 export interface ExplainabilityPayload {
+  fitment_score?: number;
+  fitment_category?: string;
+  confidence?: number;
   matched_skills: string[];
   missing_skills: string[];
   matched_preferred_skills: string[];
   missing_preferred_skills: string[];
-  experience_comparison: {
+  experience_comparison?: {
     required_years: number;
     candidate_years: number;
     delta_years: number;
     meets_requirement: boolean;
   };
-  qualification_comparison: {
+  qualification_comparison?: {
     required_degree: string;
     candidate_degree: string;
     status: string;
   };
   strengths: string[];
   skill_gaps: string[];
+  risk_flags?: string[];
+  uncertainty_flags?: string[];
   recommendation_rationale: string;
+  requirement_analysis?: RequirementAnalysisItem[];
+  recruiter_recommendation?: string;
+  missing_skills_analysis?: {
+    skill: string;
+    status: string;
+    classification: string;
+    evidence_notes: string;
+  }[];
+  recruiter_verification_questions?: string[];
+  score_consistency?: {
+    status: string;
+    flags: string[];
+    original_score: number;
+    adjusted_score: number;
+  };
+  model_metadata?: {
+    provider?: string;
+    model?: string;
+    prompt_version?: string;
+    evaluated_at?: string;
+  };
 }
 
 export interface MatrixCell {
@@ -82,6 +117,8 @@ export interface LeaderboardEntry {
   qualification_score: number;
   matched_skills_count: number;
   missing_skills_count: number;
+  fitment_category?: string;
+  recruiter_recommendation?: string;
 }
 
 export interface EvaluationRunResponse {

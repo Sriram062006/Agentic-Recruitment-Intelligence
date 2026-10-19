@@ -163,6 +163,90 @@ class EvaluationRepository:
                 error_message=row["error_message"],
             )
 
+    def list_runs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        recruiter_id: Optional[UUID] = None,
+        status: Optional[str] = None,
+        token: Optional[str] = None,
+    ) -> List[EvaluationRunResponse]:
+        """Lists historical evaluation runs, ordered by started_at DESC."""
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            query = client.table("evaluation_runs").select("*")
+            if recruiter_id:
+                query = query.eq("recruiter_id", str(recruiter_id))
+            if status:
+                query = query.eq("status", status.upper())
+            res = (
+                query.order("started_at", desc=True)
+                .range(offset, offset + limit - 1)
+                .execute()
+            )
+            runs = []
+            for row in res.data:
+                conf = row["config"]
+                if isinstance(conf, str):
+                    conf = json.loads(conf)
+                runs.append(
+                    EvaluationRunResponse(
+                        id=UUID(row["id"]),
+                        recruiter_id=UUID(row["recruiter_id"]) if row.get("recruiter_id") else None,
+                        status=RunStatus(row["status"]),
+                        total_candidates=row["total_candidates"],
+                        total_jobs=row["total_jobs"],
+                        total_evaluations=row["total_evaluations"],
+                        config=conf,
+                        started_at=datetime.fromisoformat(row["started_at"]),
+                        completed_at=(
+                            datetime.fromisoformat(row["completed_at"])
+                            if row.get("completed_at")
+                            else None
+                        ),
+                        error_message=row.get("error_message"),
+                    )
+                )
+            return runs
+
+        # SQLite fallback
+        with self.db._get_connection() as conn:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM evaluation_runs WHERE 1=1"
+            params: List[object] = []
+            if recruiter_id:
+                sql += " AND recruiter_id = ?"
+                params.append(str(recruiter_id))
+            if status:
+                sql += " AND status = ?"
+                params.append(status.upper())
+            sql += " ORDER BY started_at DESC LIMIT ? OFFSET ?;"
+            params.extend([limit, offset])
+
+            cursor.execute(sql, tuple(params))
+            rows = cursor.fetchall()
+            runs = []
+            for r in rows:
+                runs.append(
+                    EvaluationRunResponse(
+                        id=UUID(r["id"]),
+                        recruiter_id=UUID(r["recruiter_id"]) if "recruiter_id" in r.keys() else None,
+                        status=RunStatus(r["status"]),
+                        total_candidates=r["total_candidates"],
+                        total_jobs=r["total_jobs"],
+                        total_evaluations=r["total_evaluations"],
+                        config=json.loads(r["config"]),
+                        started_at=datetime.fromisoformat(r["started_at"]),
+                        completed_at=(
+                            datetime.fromisoformat(r["completed_at"])
+                            if r["completed_at"]
+                            else None
+                        ),
+                        error_message=r["error_message"],
+                    )
+                )
+            return runs
+
     def save_bulk_evaluations(self, evaluations: List[Dict], token: Optional[str] = None) -> None:
         """Saves a batch of Candidate x Job evaluation records."""
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -175,6 +259,23 @@ class EvaluationRepository:
                 expl = ev["explainability"]
                 if hasattr(expl, "model_dump"):
                     expl = expl.model_dump()
+
+                # Guard against NUMERIC(5, 4) overflow: column accepts max 9.9999, standard range 0.0000 - 1.0000
+                raw_comp = float(ev["composite_score"])
+                comp_score = round(raw_comp / 100.0 if raw_comp > 1.0 else raw_comp, 4)
+
+                raw_sem = float(ev.get("semantic_score", 0.0))
+                sem_score = round(raw_sem / 100.0 if raw_sem > 1.0 else raw_sem, 4)
+
+                raw_skill = float(ev.get("skill_score", 0.0))
+                skill_score = round(raw_skill / 100.0 if raw_skill > 1.0 else raw_skill, 4)
+
+                raw_exp = float(ev.get("experience_score", 0.0))
+                exp_score = round(raw_exp / 100.0 if raw_exp > 1.0 else raw_exp, 4)
+
+                raw_qual = float(ev.get("qualification_score", 0.0))
+                qual_score = round(raw_qual / 100.0 if raw_qual > 1.0 else raw_qual, 4)
+
                 supabase_batch.append(
                     {
                         "id": ev_id,
@@ -182,11 +283,11 @@ class EvaluationRepository:
                         "recruiter_id": rid,
                         "candidate_id": str(ev["candidate_id"]),
                         "job_id": str(ev["job_id"]),
-                        "semantic_score": float(ev["semantic_score"]),
-                        "skill_score": float(ev["skill_score"]),
-                        "experience_score": float(ev["experience_score"]),
-                        "qualification_score": float(ev["qualification_score"]),
-                        "composite_score": float(ev["composite_score"]),
+                        "semantic_score": sem_score,
+                        "skill_score": skill_score,
+                        "experience_score": exp_score,
+                        "qualification_score": qual_score,
+                        "composite_score": comp_score,
                         "rank_in_role": int(ev["rank_in_role"]),
                         "explainability": expl,
                         "created_at": now_iso,
@@ -241,7 +342,17 @@ class EvaluationRepository:
             cells = []
             for row in res.data:
                 score = float(row["composite_score"])
-                tier = "Strong" if score >= 0.75 else "Moderate" if score >= 0.50 else "Low"
+                score_pct = score * 100.0 if score <= 1.0 else score
+                if score_pct >= 85.0:
+                    tier = "Excellent"
+                elif score_pct >= 70.0:
+                    tier = "Strong"
+                elif score_pct >= 55.0:
+                    tier = "Moderate"
+                elif score_pct >= 40.0:
+                    tier = "Partial"
+                else:
+                    tier = "Low"
                 cells.append(
                     MatrixCell(
                         candidate_id=UUID(row["candidate_id"]),
@@ -267,7 +378,17 @@ class EvaluationRepository:
             cells = []
             for row in rows:
                 score = float(row["composite_score"])
-                tier = "Strong" if score >= 0.75 else "Moderate" if score >= 0.50 else "Low"
+                score_pct = score * 100.0 if score <= 1.0 else score
+                if score_pct >= 85.0:
+                    tier = "Excellent"
+                elif score_pct >= 70.0:
+                    tier = "Strong"
+                elif score_pct >= 55.0:
+                    tier = "Moderate"
+                elif score_pct >= 40.0:
+                    tier = "Partial"
+                else:
+                    tier = "Low"
                 cells.append(
                     MatrixCell(
                         candidate_id=UUID(row["candidate_id"]),
@@ -316,6 +437,8 @@ class EvaluationRepository:
                         qualification_score=float(row["qualification_score"]),
                         matched_skills_count=len(expl_data.get("matched_skills", [])),
                         missing_skills_count=len(expl_data.get("missing_skills", [])),
+                        fitment_category=expl_data.get("fitment_category"),
+                        recruiter_recommendation=expl_data.get("recruiter_recommendation"),
                     )
                 )
             return entries
@@ -352,6 +475,8 @@ class EvaluationRepository:
                         qualification_score=float(row["qualification_score"]),
                         matched_skills_count=len(expl_data.get("matched_skills", [])),
                         missing_skills_count=len(expl_data.get("missing_skills", [])),
+                        fitment_category=expl_data.get("fitment_category"),
+                        recruiter_recommendation=expl_data.get("recruiter_recommendation"),
                     )
                 )
             return entries

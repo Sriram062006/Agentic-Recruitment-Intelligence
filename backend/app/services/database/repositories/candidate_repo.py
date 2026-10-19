@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from app.schemas.candidate import CandidateProfile, CandidateResponse
+from app.schemas.candidate import (
+    CandidateContactUpdate,
+    CandidateProfile,
+    CandidateResponse,
+)
 from app.services.database.supabase_client import get_db
 
 DEFAULT_LOCAL_RECRUITER_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -223,6 +227,72 @@ class CandidateRepository:
             )
             conn.commit()
             return cursor.rowcount > 0
+
+    def update_contact_info(
+        self,
+        candidate_id: UUID,
+        contact_update: "CandidateContactUpdate",
+        recruiter_id: Optional[UUID] = None,
+        token: Optional[str] = None,
+    ) -> Optional[CandidateResponse]:
+        """Updates editable contact details (name, email, phone, location) ONLY without modifying professional history or FAISS index."""
+        cand = self.get_by_id(candidate_id, recruiter_id=recruiter_id, token=token)
+        if not cand:
+            return None
+
+        prof = cand.structured_profile
+        if contact_update.full_name is not None:
+            prof.full_name = contact_update.full_name
+            if prof.personal_information:
+                prof.personal_information.full_name = contact_update.full_name
+        if contact_update.email is not None:
+            prof.email = contact_update.email
+            if prof.personal_information:
+                prof.personal_information.email = contact_update.email
+        if contact_update.phone is not None:
+            prof.phone = contact_update.phone
+            if prof.personal_information:
+                prof.personal_information.phone = contact_update.phone
+        if contact_update.location is not None:
+            prof.location = contact_update.location
+            if prof.personal_information:
+                prof.personal_information.location = contact_update.location
+        if contact_update.years_of_experience is not None:
+            if prof.experience_years_original_calculated is None:
+                prof.experience_years_original_calculated = prof.total_experience_years
+            prof.total_experience_years = round(float(contact_update.years_of_experience), 1)
+            prof.experience_years_source = "manual"
+            prof.experience_years_updated_by = str(recruiter_id) if recruiter_id else "recruiter"
+            prof.experience_years_updated_at = datetime.now(timezone.utc).isoformat()
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        prof_dict = prof.model_dump()
+
+        if self.db.is_supabase_active and token:
+            client = self.db.get_client(token)
+            query = (
+                client.table("candidates")
+                .update({"structured_profile": prof_dict, "updated_at": now_iso})
+                .eq("id", str(candidate_id))
+            )
+            if recruiter_id:
+                query = query.eq("recruiter_id", str(recruiter_id))
+            res = query.execute()
+            if not res.data:
+                return None
+            return self.get_by_id(candidate_id, recruiter_id=recruiter_id, token=token)
+
+        with self.db._get_connection() as conn:
+            cursor = conn.cursor()
+            sql = "UPDATE candidates SET structured_profile = ?, updated_at = ? WHERE id = ?"
+            params = [json.dumps(prof_dict), now_iso, str(candidate_id)]
+            if recruiter_id:
+                sql += " AND recruiter_id = ?"
+                params.append(str(recruiter_id))
+            cursor.execute(sql + ";", tuple(params))
+            conn.commit()
+
+        return self.get_by_id(candidate_id, recruiter_id=recruiter_id)
 
     def list_all(
         self,

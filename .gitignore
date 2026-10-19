@@ -54,6 +54,9 @@ data/
 data/faiss/
 data/cache/
 data/uploads/
+*.sql.bak
+backend/scratch_*.sql
+backend/temp_hashes.json
 
 # IDE and OS
 .vscode/

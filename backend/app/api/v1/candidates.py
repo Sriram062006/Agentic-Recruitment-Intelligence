@@ -1,18 +1,26 @@
 """
 API endpoints for Candidate Pool Ingestion, Canonical Profiles, and Directory Management.
 Preserves the Single-Candidate Multi-Role Model and SHA-256 Deduplication.
-Secured with Supabase Authentication and PostgreSQL Row Level Security.
+Secured with Supabase Authentication, RBAC, and PostgreSQL Row Level Security.
 """
 
 from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.auth import (
+    AuthenticatedUser,
+    require_any_authenticated,
+    require_recruiter_or_admin,
+)
 from app.core.logging import get_logger
 from app.core.orchestrator import PipelineOrchestrator
 from app.parsers.factory import parse_document
-from app.schemas.candidate import CandidateProfile, CandidateResponse
+from app.schemas.candidate import (
+    CandidateContactUpdate,
+    CandidateProfile,
+    CandidateResponse,
+)
 from app.services.database.repositories.candidate_repo import CandidateRepository
 from app.services.embeddings.sentence_transformer import SentenceTransformerService
 from app.services.llm.gemini_provider import GeminiLLMProvider
@@ -43,7 +51,7 @@ orchestrator = PipelineOrchestrator(
 )
 async def upload_candidates(
     files: List[UploadFile] = File(..., description="Resume files in PDF or DOCX format"),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_recruiter_or_admin),
 ) -> List[CandidateResponse]:
     """
     Ingests resumes, enforces SHA-256 deduplication, extracts canonical profiles,
@@ -135,10 +143,10 @@ def list_candidates(
     query: Optional[str] = Query(default=None, description="Search by candidate name or skill"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_any_authenticated),
 ) -> List[CandidateResponse]:
-    """Lists candidates belonging to the authenticated recruiter pool with optional search filtering."""
-    candidates = candidate_repo.list_all(limit=limit, offset=offset, recruiter_id=user.id, token=user.token)
+    """Lists candidates in the candidate pool with search filtering and pagination."""
+    candidates = candidate_repo.list_all(limit=limit, offset=offset, recruiter_id=None, token=user.token)
     if query:
         q_lower = query.lower()
         candidates = [
@@ -159,13 +167,82 @@ def list_candidates(
 )
 def get_candidate(
     candidate_id: UUID,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_any_authenticated),
 ) -> CandidateResponse:
     """Retrieves full canonical profile for a specific candidate."""
-    cand = candidate_repo.get_by_id(candidate_id, recruiter_id=user.id, token=user.token)
+    cand = candidate_repo.get_by_id(candidate_id, recruiter_id=None, token=user.token)
     if not cand:
         raise HTTPException(status_code=404, detail=f"Candidate with ID '{candidate_id}' not found")
     return cand
+
+
+@router.get(
+    "/{candidate_id}/file",
+    summary="Download or view original candidate resume file",
+)
+def get_candidate_file(
+    candidate_id: UUID,
+    user: AuthenticatedUser = Depends(require_any_authenticated),
+):
+    """Streams original resume document (PDF/DOCX) from Supabase Storage for reference."""
+    cand = candidate_repo.get_by_id(candidate_id, recruiter_id=None, token=user.token)
+    if not cand:
+        raise HTTPException(status_code=404, detail=f"Candidate with ID '{candidate_id}' not found")
+
+    try:
+        content = storage_service.download_file("resumes", cand.storage_path, token=user.token)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Resume file not found in storage for candidate '{candidate_id}'")
+    except Exception as e:
+        logger.error("Failed to download resume file: %s", e)
+        raise HTTPException(status_code=500, detail=f"Storage retrieval error: {str(e)}")
+
+    fname_lower = cand.file_name.lower()
+    if fname_lower.endswith(".pdf"):
+        media_type = "application/pdf"
+    elif fname_lower.endswith(".docx"):
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif fname_lower.endswith(".doc"):
+        media_type = "application/msword"
+    else:
+        media_type = "application/octet-stream"
+
+    from fastapi.responses import Response
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{cand.file_name}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
+@router.patch(
+    "/{candidate_id}/contact",
+    response_model=CandidateResponse,
+    summary="Update candidate contact information (Name, Phone, Email, Location ONLY)",
+)
+def update_candidate_contact(
+    candidate_id: UUID,
+    contact_update: CandidateContactUpdate,
+    user: AuthenticatedUser = Depends(require_recruiter_or_admin),
+) -> CandidateResponse:
+    """
+    Updates editable contact information (Full Name, Email, Phone, Location) for a candidate.
+    Strictly preserves professional career history, skills, education, and FAISS vector index.
+    Protected by RBAC: Admin and Recruiter only (Viewers rejected with 403 Forbidden).
+    """
+    updated = candidate_repo.update_contact_info(
+        candidate_id=candidate_id,
+        contact_update=contact_update,
+        recruiter_id=None,
+        token=user.token,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Candidate with ID '{candidate_id}' not found")
+    logger.info("Updated contact details for candidate ID %s by user %s", candidate_id, user.id)
+    return updated
 
 
 @router.delete(
@@ -175,10 +252,11 @@ def get_candidate(
 )
 def delete_candidate(
     candidate_id: UUID,
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_recruiter_or_admin),
 ) -> None:
     """Deletes a candidate from PostgreSQL and removes their vector from FAISS."""
     deleted = candidate_repo.delete(candidate_id, recruiter_id=user.id, token=user.token)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Candidate with ID '{candidate_id}' not found")
     faiss_store.delete_candidate(candidate_id)
+

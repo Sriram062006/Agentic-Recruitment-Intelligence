@@ -85,6 +85,18 @@ def test_api_v1_full_workflow():
     assert "Python" in expl["matched_skills"]
     assert len(expl["strengths"]) > 0
 
+    # 7. Verify Candidate and Job File Retrieval
+    cand_file_resp = client.get(f"/api/v1/candidates/{candidate_id}/file")
+    assert cand_file_resp.status_code == 200
+    assert cand_file_resp.headers["content-type"] == "application/pdf"
+    assert "john_resume.pdf" in cand_file_resp.headers["content-disposition"]
+    assert len(cand_file_resp.content) > 0
+
+    job_file_resp = client.get(f"/api/v1/jobs/{job_id}/file")
+    assert job_file_resp.status_code == 200
+    assert job_file_resp.headers["content-type"] == "application/pdf"
+    assert len(job_file_resp.content) > 0
+
     # Cleanup
     client.delete(f"/api/v1/jobs/{job_id}")
     client.delete(f"/api/v1/candidates/{candidate_id}")

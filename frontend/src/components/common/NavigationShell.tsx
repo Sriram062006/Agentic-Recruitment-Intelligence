@@ -1,7 +1,8 @@
 import React from "react";
-import { Briefcase, Users, Grid3X3, Layers } from "lucide-react";
+import { Briefcase, Users, Grid3X3, Layers, History, Shield } from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
 
-export type NavTab = "workspace" | "jobs" | "candidates" | "evaluation";
+export type NavTab = "workspace" | "jobs" | "candidates" | "evaluation" | "history" | "admin";
 
 interface NavigationShellProps {
   activeTab: NavTab;
@@ -12,27 +13,43 @@ export const NavigationShell: React.FC<NavigationShellProps> = ({
   activeTab,
   onTabChange,
 }) => {
+  const { isAdmin } = useAuth();
+
   const navItems = [
-    {
-      id: "workspace" as NavTab,
-      label: "Recruitment Workspace",
-      icon: <Layers className="h-4 w-4" />,
-    },
-    {
-      id: "jobs" as NavTab,
-      label: "Job Management",
-      icon: <Briefcase className="h-4 w-4" />,
-    },
     {
       id: "candidates" as NavTab,
       label: "Candidate Pool",
       icon: <Users className="h-4 w-4" />,
     },
     {
+      id: "jobs" as NavTab,
+      label: "Job Descriptions",
+      icon: <Briefcase className="h-4 w-4" />,
+    },
+    {
       id: "evaluation" as NavTab,
       label: "Multi-Role Evaluation & Matrix",
       icon: <Grid3X3 className="h-4 w-4" />,
     },
+    {
+      id: "history" as NavTab,
+      label: "Evaluation History",
+      icon: <History className="h-4 w-4" />,
+    },
+    {
+      id: "workspace" as NavTab,
+      label: "Recruitment Workspace",
+      icon: <Layers className="h-4 w-4" />,
+    },
+    ...(isAdmin
+      ? [
+          {
+            id: "admin" as NavTab,
+            label: "Admin Panel",
+            icon: <Shield className="h-4 w-4" />,
+          },
+        ]
+      : []),
   ];
 
   return (

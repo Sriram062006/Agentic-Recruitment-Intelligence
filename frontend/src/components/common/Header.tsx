@@ -1,11 +1,10 @@
 import React from "react";
-import { Sparkles, Database, User, LogOut } from "lucide-react";
+import { Sparkles, Database, User, LogOut, Shield, Eye } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 
 export const Header: React.FC = () => {
-  const { user, signOut } = useAuth();
-  const recruiterName = user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Recruiter";
-  const role = user?.user_metadata?.role || "recruiter";
+  const { user, profile, role, isViewer, isAdmin, signOut } = useAuth();
+  const userName = profile?.full_name || user?.user_metadata?.full_name || user?.email?.split("@")[0] || "Recruiter";
 
   return (
     <header className="border-b border-border bg-white px-6 py-4 shadow-sm">
@@ -33,12 +32,33 @@ export const Header: React.FC = () => {
           {user && (
             <div className="flex items-center space-x-3 pl-2 border-l border-gray-200">
               <div className="flex items-center space-x-2 text-xs">
-                <div className="w-7 h-7 rounded-full bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-700 font-semibold">
-                  <User className="w-3.5 h-3.5" />
+                <div className={`w-7 h-7 rounded-full border flex items-center justify-center font-semibold ${
+                  isAdmin
+                    ? "bg-purple-100 border-purple-200 text-purple-700"
+                    : isViewer
+                    ? "bg-amber-100 border-amber-200 text-amber-700"
+                    : "bg-indigo-100 border-indigo-200 text-indigo-700"
+                }`}>
+                  {isAdmin ? <Shield className="w-3.5 h-3.5" /> : isViewer ? <Eye className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
                 </div>
                 <div>
-                  <div className="font-semibold text-gray-800 leading-none">{recruiterName}</div>
-                  <div className="text-[10px] text-gray-400 capitalize mt-0.5">{role}</div>
+                  <div className="font-semibold text-gray-800 leading-none">{userName}</div>
+                  <div className="flex items-center gap-1 mt-1">
+                    <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wider ${
+                      isAdmin
+                        ? "bg-purple-100 text-purple-800 border border-purple-200"
+                        : isViewer
+                        ? "bg-amber-100 text-amber-800 border border-amber-200"
+                        : "bg-indigo-100 text-indigo-800 border border-indigo-200"
+                    }`}>
+                      {role}
+                    </span>
+                    {isViewer && (
+                      <span className="text-[10px] text-amber-600 font-normal">
+                        (Read-Only)
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 

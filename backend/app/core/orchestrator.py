@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 from app.config import get_settings
 from app.core.logging import get_logger
+from app.pipeline.ai_fitment import AIFitmentEvaluator
 from app.pipeline.explainer import generate_fitment_explanation
 from app.pipeline.scorer import calculate_deterministic_fitment
 from app.schemas.candidate import CandidateProfile, CandidateResponse
@@ -37,37 +38,53 @@ logger = get_logger("orchestrator")
 def build_candidate_semantic_text(profile: CandidateProfile) -> str:
     """
     Builds a deterministic, rich textual representation of candidate qualifications for Sentence Transformers.
-    Incorporates: Professional Summary + Skills + Work Experience + Responsibilities +
-    Projects + Education + Certifications + Technologies + Domains.
+    Incorporates: Professional Summary + Career Objective + Skills + Work Experience + Responsibilities +
+    Methodologies + Projects + Education + Certifications + Technologies + Domains + Languages + Tools.
     """
     parts = []
 
     # 1. Candidate Overview & Summary
-    summary = profile.professional_summary or profile.summary or ""
+    summary = profile.professional_summary or profile.executive_summary or profile.summary or ""
     parts.append(
         f"Candidate: {profile.full_name}. "
         f"Total Experience: {profile.total_experience_years} years. "
         f"Highest Qualification: {profile.highest_qualification}. "
         f"Professional Summary: {summary}"
     )
+    if profile.career_objective:
+        parts.append(f"Career Objective: {profile.career_objective}")
 
-    # 2. Canonical Skills
+    # 2. Canonical Skills & Categorization
     if profile.skills:
         parts.append(f"Core Skills: {', '.join(profile.skills)}.")
+    if profile.skills_by_category:
+        cat_strs = [f"{cat}: {', '.join(items)}" for cat, items in profile.skills_by_category.items() if items]
+        if cat_strs:
+            parts.append(f"Skill Disciplines: {'; '.join(cat_strs)}.")
 
-    # 3. Work Experience with Responsibilities & Technologies
+    # 3. Work Experience with Full Responsibilities & Technologies
     if profile.experience_history:
         exp_details = []
         for e in profile.experience_history:
             role_desc = f"{e.title}"
             if e.organization:
                 role_desc += f" at {e.organization}"
+            if e.client:
+                role_desc += f" (Client: {e.client})"
             if e.duration_years:
                 role_desc += f" ({e.duration_years} years)"
             if e.responsibilities:
-                role_desc += f" - Duties: {'; '.join(e.responsibilities[:3])}"
+                role_desc += f" - Duties: {'; '.join(e.responsibilities)}"
+            if e.achievements:
+                role_desc += f" - Achievements: {'; '.join(e.achievements)}"
+            if e.methodologies:
+                role_desc += f" - Methodologies: {', '.join(e.methodologies)}"
+            if e.project_names:
+                role_desc += f" - Projects: {', '.join(e.project_names)}"
+            if e.quantified_metrics:
+                role_desc += f" - Metrics: {', '.join(e.quantified_metrics)}"
             if e.technologies:
-                role_desc += f" - Tech: {', '.join(e.technologies[:6])}"
+                role_desc += f" - Tech: {', '.join(e.technologies)}"
             exp_details.append(role_desc)
         parts.append(f"Career History: {' | '.join(exp_details)}.")
 
@@ -80,6 +97,8 @@ def build_candidate_semantic_text(profile: CandidateProfile) -> str:
                 p_str += f": {p.description}"
             if p.technologies:
                 p_str += f" (Tech: {', '.join(p.technologies)})"
+            if p.responsibilities:
+                p_str += f" [Duties: {'; '.join(p.responsibilities)}]"
             proj_details.append(p_str)
         parts.append(f"Projects: {' | '.join(proj_details)}.")
 
@@ -106,7 +125,11 @@ def build_candidate_semantic_text(profile: CandidateProfile) -> str:
     if profile.domains:
         parts.append(f"Industry Domains: {', '.join(profile.domains)}.")
 
-    # 8. Languages
+    # 8. Tools & Platforms
+    if profile.tools_and_technologies:
+        parts.append(f"Tools & Platforms: {', '.join(profile.tools_and_technologies)}.")
+
+    # 9. Languages
     if profile.languages:
         parts.append(f"Languages: {', '.join(profile.languages)}.")
 
@@ -114,18 +137,31 @@ def build_candidate_semantic_text(profile: CandidateProfile) -> str:
 
 
 def build_job_semantic_text(profile: JobProfile) -> str:
-    """Builds a dense textual representation of job role requirements for embedding."""
+    """Builds an exhaustive, dense textual representation of job role requirements for embedding."""
     req_skills = ", ".join(profile.required_skills)
-    pref_skills = ", ".join(profile.preferred_skills)
-    resp = "; ".join(profile.key_responsibilities[:3])
+    pref_skills = ", ".join(profile.preferred_skills) if profile.preferred_skills else "None specified"
+    resp = "; ".join(profile.key_responsibilities) if profile.key_responsibilities else "Core role duties"
+    pref_exp_str = f"Preferred Experience: {profile.preferred_experience_years} years. " if profile.preferred_experience_years else ""
+    client_str = f"Company/Client: {profile.company_or_client}. " if profile.company_or_client else ""
+    loc_str = f"Location: {profile.location}. Remote: {profile.remote_work}. " if profile.location else ""
+    mh_str = f"Must-Have Requirements: {'; '.join(profile.must_have_requirements)}. " if profile.must_have_requirements else ""
+    sh_str = f"Should-Have Requirements: {'; '.join(profile.should_have_requirements)}. " if profile.should_have_requirements else ""
+    lang_str = f"Required Languages: {', '.join(profile.languages)}. " if profile.languages else ""
+
     return (
         f"Job Title: {profile.title}. "
         f"Department: {profile.department or 'General'}. "
+        f"{client_str}"
+        f"{loc_str}"
         f"Minimum Experience: {profile.min_experience_years} years. "
+        f"{pref_exp_str}"
         f"Required Degree: {profile.required_qualification}. "
         f"Required Skills: {req_skills}. "
         f"Preferred Skills: {pref_skills}. "
-        f"Responsibilities: {resp}. "
+        f"{mh_str}"
+        f"{sh_str}"
+        f"{lang_str}"
+        f"Key Responsibilities: {resp}. "
         f"Overview: {profile.summary}"
     ).strip()
 
@@ -139,6 +175,7 @@ class PipelineOrchestrator:
         embedding_service: Optional[SentenceTransformerService] = None,
         faiss_store: Optional[FAISSVectorStore] = None,
         llm_provider: Optional[GeminiLLMProvider] = None,
+        ai_fitment_evaluator: Optional[AIFitmentEvaluator] = None,
     ):
         self.job_repo = job_repo or JobRepository()
         self.candidate_repo = candidate_repo or CandidateRepository()
@@ -146,6 +183,7 @@ class PipelineOrchestrator:
         self.embedding_service = embedding_service or SentenceTransformerService()
         self.faiss_store = faiss_store or get_faiss_store()
         self.llm_provider = llm_provider or GeminiLLMProvider()
+        self.ai_fitment_evaluator = ai_fitment_evaluator or AIFitmentEvaluator(llm_provider=self.llm_provider)
 
     def index_candidate(self, candidate_response: CandidateResponse) -> int:
         """Embeds and indexes a single canonical candidate profile into FAISS."""
@@ -163,8 +201,8 @@ class PipelineOrchestrator:
         token: Optional[str] = None,
     ) -> EvaluationRunResponse:
         """
-        Executes N candidates x M jobs matrix evaluation.
-        Produces exactly N x M role-wise candidate evaluations.
+        Executes N candidates x M jobs matrix evaluation using the AI Fitment Engine.
+        Produces exactly N x M role-wise candidate evaluations ranked by fitment score DESC.
         """
         settings = get_settings()
         rid = run_id or uuid4()
@@ -189,7 +227,8 @@ class PipelineOrchestrator:
         if not target_candidates:
             raise ValueError("No candidates found in pool for evaluation run")
 
-        # 3. Resolve Configurable Weights & Heuristics
+        is_deterministic_mode = (request.evaluation_engine == "deterministic")
+
         weights = request.weights or FitmentWeightsConfig(
             semantic_weight=settings.semantic_weight,
             skill_weight=settings.skill_weight,
@@ -203,12 +242,23 @@ class PipelineOrchestrator:
             fitment_moderate_threshold=settings.fitment_moderate_threshold,
         )
 
-        config_snapshot = {
-            "weights": weights.model_dump(),
-            "heuristics": heuristics.model_dump(),
-        }
+        if is_deterministic_mode:
+            config_snapshot = {
+                "evaluation_engine": "deterministic",
+                "weights": weights.model_dump(),
+                "heuristics": heuristics.model_dump(),
+            }
+        else:
+            config_snapshot = {
+                "evaluation_engine": "ai_fitment",
+                "provider": "Google Gemini",
+                "model": self.ai_fitment_evaluator.model_name,
+                "prompt_version": self.ai_fitment_evaluator.prompt_version,
+                "weights": weights.model_dump(),
+                "heuristics": heuristics.model_dump(),
+            }
 
-        # 4. Create Evaluation Run Record
+        # 3. Create Evaluation Run Record
         run_record = self.evaluation_repo.create_run(
             total_candidates=len(target_candidates),
             total_jobs=len(target_jobs),
@@ -220,14 +270,14 @@ class PipelineOrchestrator:
         self.evaluation_repo.update_run_status(rid, RunStatus.PROCESSING, token=token)
 
         try:
-            # 5. Ensure All Target Candidates are Indexed in FAISS
+            # 4. Ensure All Target Candidates are Indexed in FAISS
             for cand in target_candidates:
                 if cand.faiss_index_id is None or cand.id not in self.faiss_store._uuid_to_id:
                     self.index_candidate(cand)
 
             all_evaluations: List[Dict] = []
 
-            # 6. Evaluate Each Job independently across all Candidates
+            # 5. Evaluate Each Job independently across all Candidates
             for job in target_jobs:
                 job_semantic_text = build_job_semantic_text(job.structured_profile)
                 job_vector = self.embedding_service.embed_text(job_semantic_text)
@@ -235,53 +285,74 @@ class PipelineOrchestrator:
                 job_eval_candidates = []
 
                 for cand in target_candidates:
-                    # Semantic Cosine Similarity via FAISS Inner Product
                     sim = self.faiss_store.compute_similarity(cand.id, job_vector)
 
-                    # Deterministic Fitment Scoring
-                    fitment_signals = calculate_deterministic_fitment(
-                        candidate=cand.structured_profile,
-                        job=job.structured_profile,
-                        semantic_similarity=sim,
-                        weights=weights,
-                        heuristics=heuristics,
-                    )
+                    if is_deterministic_mode:
+                        # Deterministic Fitment Scoring
+                        fitment_signals = calculate_deterministic_fitment(
+                            candidate=cand.structured_profile,
+                            job=job.structured_profile,
+                            semantic_similarity=sim,
+                            weights=weights,
+                            heuristics=heuristics,
+                        )
+                        explainability = generate_fitment_explanation(
+                            candidate=cand.structured_profile,
+                            job=job.structured_profile,
+                            fitment_signals=fitment_signals,
+                            llm_provider=self.llm_provider,
+                            candidate_raw_text=cand.raw_text,
+                        )
+                        job_eval_candidates.append(
+                            {
+                                "id": uuid4(),
+                                "run_id": rid,
+                                "recruiter_id": recruiter_id,
+                                "candidate_id": cand.id,
+                                "job_id": job.id,
+                                "composite_score": fitment_signals["composite_score"],
+                                "semantic_score": fitment_signals["semantic_score"],
+                                "skill_score": fitment_signals["skill_score"],
+                                "experience_score": fitment_signals["experience_score"],
+                                "qualification_score": fitment_signals["qualification_score"],
+                                "explainability": explainability.model_dump(),
+                            }
+                        )
+                    else:
+                        # Production AI Fitment Engine
+                        eval_result = self.ai_fitment_evaluator.evaluate_fitment(
+                            candidate=cand.structured_profile,
+                            job=job.structured_profile,
+                            candidate_raw_text=cand.raw_text,
+                            semantic_similarity=sim,
+                        )
+                        job_eval_candidates.append(
+                            {
+                                "id": uuid4(),
+                                "run_id": rid,
+                                "recruiter_id": recruiter_id,
+                                "candidate_id": cand.id,
+                                "job_id": job.id,
+                                "composite_score": eval_result["composite_score"],
+                                "semantic_score": eval_result["semantic_score"],
+                                "skill_score": eval_result["skill_score"],
+                                "experience_score": eval_result["experience_score"],
+                                "qualification_score": eval_result["qualification_score"],
+                                "explainability": eval_result["explainability"].model_dump(),
+                            }
+                        )
 
-                    # Grounded Explainability Synthesis
-                    explainability = generate_fitment_explanation(
-                        candidate=cand.structured_profile,
-                        job=job.structured_profile,
-                        fitment_signals=fitment_signals,
-                        llm_provider=self.llm_provider,
-                    )
-
-                    job_eval_candidates.append(
-                        {
-                            "id": uuid4(),
-                            "run_id": rid,
-                            "recruiter_id": recruiter_id,
-                            "candidate_id": cand.id,
-                            "job_id": job.id,
-                            "composite_score": fitment_signals["composite_score"],
-                            "semantic_score": fitment_signals["semantic_score"],
-                            "skill_score": fitment_signals["skill_score"],
-                            "experience_score": fitment_signals["experience_score"],
-                            "qualification_score": fitment_signals["qualification_score"],
-                            "explainability": explainability.model_dump(),
-                        }
-                    )
-
-                # 7. Role-Wise Ranking: Sort candidates by composite_score DESC
+                # 6. Role-Wise Ranking: Sort candidates by composite_score DESC (highest fit first)
                 job_eval_candidates.sort(key=lambda x: x["composite_score"], reverse=True)
                 for rank_idx, eval_item in enumerate(job_eval_candidates, start=1):
                     eval_item["rank_in_role"] = rank_idx
                     all_evaluations.append(eval_item)
 
-            # 8. Save All N x M Evaluation Records
+            # 7. Save All N x M Evaluation Records
             self.evaluation_repo.save_bulk_evaluations(all_evaluations, token=token)
             self.evaluation_repo.update_run_status(rid, RunStatus.COMPLETED, token=token)
             logger.info(
-                "Evaluation run %s completed: %d candidates x %d jobs = %d evaluations",
+                "AI Evaluation run %s completed: %d candidates x %d jobs = %d evaluations",
                 rid,
                 len(target_candidates),
                 len(target_jobs),
